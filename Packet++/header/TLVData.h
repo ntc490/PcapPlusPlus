@@ -20,6 +20,7 @@ namespace pcpp
 	 * that should be implemented in derived classes. These methods are for record length value calculation (the 'L' in TLV)
 	 * which is implemented differently in different protocols
 	 */
+	template<typename TRecType, typename TRecLen>
 	class TLVRecord
 	{
 	protected:
@@ -28,9 +29,9 @@ namespace pcpp
 		struct TLVRawData
 		{
 			/** Record type */
-			uint8_t recordType;
+			TRecType recordType;
 			/** Record length in bytes */
-			uint8_t recordLen;
+			TRecLen recordLen;
 			/** Record value (variable size) */
 			uint8_t recordValue[];
 		};
@@ -45,10 +46,7 @@ namespace pcpp
 		 */
 		TLVRecord(uint8_t* recordRawData)
 		{
-			if (recordRawData == NULL)
-				m_Data = NULL;
-			else
-				m_Data = (TLVRawData*)recordRawData;
+			assign(recordRawData);
 		}
 
 		/**
@@ -67,6 +65,18 @@ namespace pcpp
 		virtual ~TLVRecord() { }
 
 		/**
+		 * Assign a pointer to the TLV record raw data (byte array)
+		 * @param[in] recordRawData A pointer to the TLV record raw data
+		 */
+		void assign(uint8_t* recordRawData)
+		{
+			if(recordRawData == NULL)
+				m_Data = NULL;
+			else
+				m_Data = (TLVRawData*)recordRawData;
+		}
+
+		/**
 		 * Overload of the assignment operator. This operator doesn't copy the TLV data, but rather copies the pointer to it,
 		 * which means that after calling it both the old and the new instance will point to the same TLV raw data
 		 * @param[in] other The TLVRecord instance to assign
@@ -78,12 +88,12 @@ namespace pcpp
 		}
 
 		/**
-		 * Overload of the equality  operator. Two record are equal if both of them point to the same data, or if they point
+		 * Overload of the equality operator. Two record are equal if both of them point to the same data, or if they point
 		 * to different data but their total size is equal and the raw data they both contain is similar.
 		 * @param[in] rhs The object to compare to
 		 * @return True if both objects are equal, false otherwise
 		 */
-		bool operator==(const TLVRecord& rhs)
+		bool operator==(const TLVRecord& rhs) const
 		{
 			if (m_Data == rhs.m_Data)
 				return true;
@@ -97,31 +107,40 @@ namespace pcpp
 			return (memcmp(m_Data, rhs.m_Data, getTotalSize()) == 0);
 		}
 
+		/**
+		 * Overload of the not equal operator.
+		 * @param[in] rhs The object to compare to
+		 * @return True if objects are not equal, false otherwise
+		 */
+		bool operator!=(const TLVRecord& rhs) const
+		{
+			return !operator==(rhs);
+		}
 
 		/**
 		 * @return The type field of the record (the 'T' in __Type__-Length-Value)
 		 */
-		uint8_t getType() { return m_Data->recordType; }
+		TRecType getType() const { return m_Data->recordType; }
 
 		/**
 		 * @return A pointer to the value of the record as byte array (the 'V' in Type-Length- __Value__)
 		 */
-		uint8_t* getValue() { return m_Data->recordValue; }
+		uint8_t* getValue() const { return m_Data->recordValue; }
 
 		/**
 		 * @return True if the TLV record raw data is NULL, false otherwise
 		 */
-		bool isNull() { return (m_Data == NULL); }
+		bool isNull() const { return (m_Data == NULL); }
 
 		/**
 		 * @return True if the TLV record raw data is not NULL, false otherwise
 		 */
-		bool isNotNull() { return (m_Data != NULL); }
+		bool isNotNull() const { return (m_Data != NULL); }
 
 		/**
 		 * @return A pointer to the TLV record raw data byte stream
 		 */
-		uint8_t* getRecordBasePtr() { return (uint8_t*)m_Data; }
+		uint8_t* getRecordBasePtr() const { return (uint8_t*)m_Data; }
 
 		/**
 		 * Free the memory of the TLV record raw data
@@ -138,7 +157,7 @@ namespace pcpp
 		 * @return The record data as type T
 		 */
 		template<typename T>
-		T getValueAs(size_t offset = 0)
+		T getValueAs(size_t offset = 0) const
 		{
 			if (getDataSize() - offset < sizeof(T))
 				return 0;
@@ -175,8 +194,7 @@ namespace pcpp
 		/**
 		 * @return The size of the record value (meaning the size of the 'V' part in TLV)
 		 */
-		virtual size_t getDataSize() = 0;
-
+		virtual size_t getDataSize() const = 0;
 	};
 
 
@@ -189,7 +207,7 @@ namespace pcpp
 	class TLVRecordReader
 	{
 	private:
-		size_t m_RecordCount;
+		mutable size_t m_RecordCount;
 
 	public:
 
@@ -229,13 +247,16 @@ namespace pcpp
 		 * tlvDataLen is zero the returned TLVRecordType instance will be logically NULL, meaning TLVRecordType.isNull() will
 		 * return true
 		 */
-		TLVRecordType getFirstTLVRecord(uint8_t* tlvDataBasePtr, size_t tlvDataLen)
+		TLVRecordType getFirstTLVRecord(uint8_t* tlvDataBasePtr, size_t tlvDataLen) const
 		{
-			// check if there are records at all
-			if (tlvDataLen == 0)
-				return TLVRecordType(NULL);
+			// In most cases tlvDataLen is not zero and the size is correct therefore the overhead is not significant if the checks will be done later
+			TLVRecordType resRec(tlvDataBasePtr); // for NRVO optimization
 
-			return TLVRecordType(tlvDataBasePtr);
+			// check if there are records at all and the total size is not zero
+			if (tlvDataLen == 0 || resRec.getTotalSize() == 0)
+				resRec.assign(NULL);
+
+			return resRec;
 		}
 
 		/**
@@ -247,20 +268,26 @@ namespace pcpp
 		 * input record.isNull() is true or if the next record is out of bounds of the byte stream, a logical NULL instance
 		 * of TLVRecordType will be returned, meaning TLVRecordType.isNull() will return true
 		 */
-		TLVRecordType getNextTLVRecord(TLVRecordType& record, uint8_t* tlvDataBasePtr, size_t tlvDataLen)
+		TLVRecordType getNextTLVRecord(TLVRecordType& record, uint8_t* tlvDataBasePtr, size_t tlvDataLen) const
 		{
+			TLVRecordType resRec(NULL); // for NRVO optimization
+
 			if (record.isNull())
-				return TLVRecordType(NULL);
+				return resRec;
 
 			// record pointer is out-bounds of the TLV records memory
 			if ((record.getRecordBasePtr() - tlvDataBasePtr) < 0)
-				return TLVRecordType(NULL);
+				return resRec;
 
 			// record pointer is out-bounds of the TLV records memory
-			if (record.getRecordBasePtr() - tlvDataBasePtr + (int)record.getTotalSize()  >= (int)tlvDataLen)
-				return TLVRecordType(NULL);
+			if (record.getRecordBasePtr() - tlvDataBasePtr + (int)record.getTotalSize() >= (int)tlvDataLen)
+				return resRec;
 
-			return TLVRecordType(record.getRecordBasePtr() + record.getTotalSize());
+			resRec.assign(record.getRecordBasePtr() + record.getTotalSize());
+			if (resRec.getTotalSize() == 0)
+				resRec.assign(NULL);
+
+			return resRec;
 		}
 
 		/**
@@ -271,18 +298,21 @@ namespace pcpp
 		 * @return An instance of type TLVRecordType that contains the result record. If record was not found a logical
 		 * NULL instance of TLVRecordType will be returned, meaning TLVRecordType.isNull() will return true
 		 */
-		TLVRecordType getTLVRecord(uint8_t recordType, uint8_t* tlvDataBasePtr, size_t tlvDataLen)
+		TLVRecordType getTLVRecord(uint32_t recordType, uint8_t* tlvDataBasePtr, size_t tlvDataLen) const
 		{
 			TLVRecordType curRec = getFirstTLVRecord(tlvDataBasePtr, tlvDataLen);
 			while (!curRec.isNull())
 			{
 				if (curRec.getType() == recordType)
+				{
 					return curRec;
+				}
 
 				curRec = getNextTLVRecord(curRec, tlvDataBasePtr, tlvDataLen);
 			}
 
-			return TLVRecordType(NULL);
+			curRec.assign(NULL);
+			return curRec; // for NRVO optimization
 		}
 
 		/**
@@ -294,7 +324,7 @@ namespace pcpp
 		 * @param[in] tlvDataLen The TLV data byte stream length
 		 * @return The TLV record count
 		 */
-		size_t getTLVRecordCount(uint8_t* tlvDataBasePtr, size_t tlvDataLen)
+		size_t getTLVRecordCount(uint8_t* tlvDataBasePtr, size_t tlvDataLen) const
 		{
 			if (m_RecordCount != (size_t)-1)
 				return m_RecordCount;
@@ -336,27 +366,33 @@ namespace pcpp
 
 		TLVRecordBuilder();
 
-		TLVRecordBuilder(uint8_t recType, const uint8_t* recValue, uint8_t recValueLen);
+		TLVRecordBuilder(uint32_t recType, const uint8_t* recValue, uint8_t recValueLen);
 
-		TLVRecordBuilder(uint8_t recType, uint8_t recValue);
+		TLVRecordBuilder(uint32_t recType, uint8_t recValue);
 
-		TLVRecordBuilder(uint8_t recType, uint16_t recValue);
+		TLVRecordBuilder(uint32_t recType, uint16_t recValue);
 
-		TLVRecordBuilder(uint8_t recType, uint32_t recValue);
+		TLVRecordBuilder(uint32_t recType, uint32_t recValue);
 
-		TLVRecordBuilder(uint8_t recType, const IPv4Address& recValue);
+		TLVRecordBuilder(uint32_t recType, const IPv4Address& recValue);
 
-		TLVRecordBuilder(uint8_t recType, const std::string& recValue);
+		TLVRecordBuilder(uint32_t recType, const std::string& recValue, bool valueIsHexString = false);
 
 		TLVRecordBuilder(const TLVRecordBuilder& other);
 
+		TLVRecordBuilder& operator=(const TLVRecordBuilder& other);
+
 		virtual ~TLVRecordBuilder();
 
-		void init(uint8_t recType, const uint8_t* recValue, uint8_t recValueLen);
+		void init(uint32_t recType, const uint8_t* recValue, size_t recValueLen);
 
 		uint8_t* m_RecValue;
-		uint8_t m_RecValueLen;
-		uint8_t m_RecType;
+		size_t m_RecValueLen;
+		uint32_t m_RecType;
+
+	private:
+
+		void copyData(const TLVRecordBuilder& other);
 	};
 }
 #endif // PACKETPP_TLV_DATA

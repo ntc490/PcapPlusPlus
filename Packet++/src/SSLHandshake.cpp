@@ -1,15 +1,11 @@
 #define LOG_MODULE PacketLogModuleSSLLayer
 
-#if defined(WIN32) || defined(WINx64) || defined(PCAPPP_MINGW_ENV) //for using ntohl, ntohs, etc.
-#include <winsock2.h>
-#elif LINUX
-#include <in.h> //for using ntohl, ntohs, etc.
-#elif MAC_OS_X
-#include <arpa/inet.h> //for using ntohl, ntohs, etc.
-#endif
+#include "EndianPortable.h"
+#include "md5.h"
 #include <string.h>
 #include <sstream>
 #include <map>
+#include <set>
 #include "Logger.h"
 #include "SSLHandshake.h"
 
@@ -24,45 +20,45 @@ namespace pcpp
 static const SSLCipherSuite Cipher1 = SSLCipherSuite(0x0000, SSL_KEYX_NULL, SSL_AUTH_NULL, SSL_SYM_NULL, SSL_HASH_NULL, "TLS_NULL_WITH_NULL_NULL");
 static const SSLCipherSuite Cipher2 = SSLCipherSuite(0x0001, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_NULL, SSL_HASH_MD5, "TLS_RSA_WITH_NULL_MD5");
 static const SSLCipherSuite Cipher3 = SSLCipherSuite(0x0002, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_RSA_WITH_NULL_SHA");
-static const SSLCipherSuite Cipher4 = SSLCipherSuite(0x0003, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC4_40, SSL_HASH_MD5, "TLS_RSA_EXPORT_WITH_RC4_40_MD5");
-static const SSLCipherSuite Cipher5 = SSLCipherSuite(0x0004, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_MD5, "TLS_RSA_WITH_RC4_128_MD5");
-static const SSLCipherSuite Cipher6 = SSLCipherSuite(0x0005, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_RSA_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher7 = SSLCipherSuite(0x0006, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC2_CBC_40, SSL_HASH_MD5, "TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5");
+static const SSLCipherSuite Cipher4 = SSLCipherSuite(0x0003, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC4_40, SSL_HASH_MD5, "TLS_RSA_EXPORT_WITH_RC4_40_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher5 = SSLCipherSuite(0x0004, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_MD5, "TLS_RSA_WITH_RC4_128_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher6 = SSLCipherSuite(0x0005, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_RSA_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher7 = SSLCipherSuite(0x0006, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_RC2_CBC_40, SSL_HASH_MD5, "TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher8 = SSLCipherSuite(0x0007, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_IDEA_CBC, SSL_HASH_SHA, "TLS_RSA_WITH_IDEA_CBC_SHA");
 static const SSLCipherSuite Cipher9 = SSLCipherSuite(0x0008, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_DES40_CBC, SSL_HASH_SHA, "TLS_RSA_EXPORT_WITH_DES40_CBC_SHA");
-static const SSLCipherSuite Cipher10 = SSLCipherSuite(0x0009, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_RSA_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher11 = SSLCipherSuite(0x000A, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_RSA_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher10 = SSLCipherSuite(0x0009, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_RSA_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher11 = SSLCipherSuite(0x000A, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_RSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher12 = SSLCipherSuite(0x000B, SSL_KEYX_DH, SSL_AUTH_DSS, SSL_SYM_DES40_CBC, SSL_HASH_SHA, "TLS_DH_DSS_EXPORT_WITH_DES40_CBC_SHA");
-static const SSLCipherSuite Cipher13 = SSLCipherSuite(0x000C, SSL_KEYX_DH, SSL_AUTH_DSS, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DH_DSS_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher14 = SSLCipherSuite(0x000D, SSL_KEYX_DH, SSL_AUTH_DSS, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher13 = SSLCipherSuite(0x000C, SSL_KEYX_DH, SSL_AUTH_DSS, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DH_DSS_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher14 = SSLCipherSuite(0x000D, SSL_KEYX_DH, SSL_AUTH_DSS, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher15 = SSLCipherSuite(0x000E, SSL_KEYX_DH, SSL_AUTH_RSA, SSL_SYM_DES40_CBC, SSL_HASH_SHA, "TLS_DH_RSA_EXPORT_WITH_DES40_CBC_SHA");
-static const SSLCipherSuite Cipher16 = SSLCipherSuite(0x000F, SSL_KEYX_DH, SSL_AUTH_RSA, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DH_RSA_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher17 = SSLCipherSuite(0x0010, SSL_KEYX_DH, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher16 = SSLCipherSuite(0x000F, SSL_KEYX_DH, SSL_AUTH_RSA, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DH_RSA_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher17 = SSLCipherSuite(0x0010, SSL_KEYX_DH, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher18 = SSLCipherSuite(0x0011, SSL_KEYX_DHE, SSL_AUTH_DSS, SSL_SYM_DES40_CBC, SSL_HASH_SHA, "TLS_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA");
-static const SSLCipherSuite Cipher19 = SSLCipherSuite(0x0012, SSL_KEYX_DHE, SSL_AUTH_DSS, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DHE_DSS_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher20 = SSLCipherSuite(0x0013, SSL_KEYX_DHE, SSL_AUTH_DSS, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher19 = SSLCipherSuite(0x0012, SSL_KEYX_DHE, SSL_AUTH_DSS, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DHE_DSS_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher20 = SSLCipherSuite(0x0013, SSL_KEYX_DHE, SSL_AUTH_DSS, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher21 = SSLCipherSuite(0x0014, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_DES40_CBC, SSL_HASH_SHA, "TLS_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA");
-static const SSLCipherSuite Cipher22 = SSLCipherSuite(0x0015, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DHE_RSA_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher23 = SSLCipherSuite(0x0016, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA");
-static const SSLCipherSuite Cipher24 = SSLCipherSuite(0x0017, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_RC4_40, SSL_HASH_MD5, "TLS_DH_anon_EXPORT_WITH_RC4_40_MD5");
-static const SSLCipherSuite Cipher25 = SSLCipherSuite(0x0018, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_RC4_128, SSL_HASH_MD5, "TLS_DH_anon_WITH_RC4_128_MD5");
+static const SSLCipherSuite Cipher22 = SSLCipherSuite(0x0015, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DHE_RSA_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher23 = SSLCipherSuite(0x0016, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher24 = SSLCipherSuite(0x0017, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_RC4_40, SSL_HASH_MD5, "TLS_DH_anon_EXPORT_WITH_RC4_40_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher25 = SSLCipherSuite(0x0018, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_RC4_128, SSL_HASH_MD5, "TLS_DH_anon_WITH_RC4_128_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher26 = SSLCipherSuite(0x0019, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_DES40_CBC, SSL_HASH_SHA, "TLS_DH_anon_EXPORT_WITH_DES40_CBC_SHA");
-static const SSLCipherSuite Cipher27 = SSLCipherSuite(0x001A, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DH_anon_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher28 = SSLCipherSuite(0x001B, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DH_anon_WITH_3DES_EDE_CBC_SHA");
-static const SSLCipherSuite Cipher29 = SSLCipherSuite(0x001E, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_KRB5_WITH_DES_CBC_SHA");
-static const SSLCipherSuite Cipher30 = SSLCipherSuite(0x001F, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_KRB5_WITH_3DES_EDE_CBC_SHA");
-static const SSLCipherSuite Cipher31 = SSLCipherSuite(0x0020, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_KRB5_WITH_RC4_128_SHA");
+static const SSLCipherSuite Cipher27 = SSLCipherSuite(0x001A, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_DH_anon_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher28 = SSLCipherSuite(0x001B, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DH_anon_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher29 = SSLCipherSuite(0x001E, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC, SSL_HASH_SHA, "TLS_KRB5_WITH_DES_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher30 = SSLCipherSuite(0x001F, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_KRB5_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher31 = SSLCipherSuite(0x0020, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_KRB5_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher32 = SSLCipherSuite(0x0021, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_IDEA_CBC, SSL_HASH_SHA, "TLS_KRB5_WITH_IDEA_CBC_SHA");
-static const SSLCipherSuite Cipher33 = SSLCipherSuite(0x0022, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC, SSL_HASH_MD5, "TLS_KRB5_WITH_DES_CBC_MD5");
-static const SSLCipherSuite Cipher34 = SSLCipherSuite(0x0023, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_3DES_EDE_CBC, SSL_HASH_MD5, "TLS_KRB5_WITH_3DES_EDE_CBC_MD5");
-static const SSLCipherSuite Cipher35 = SSLCipherSuite(0x0024, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_128, SSL_HASH_MD5, "TLS_KRB5_WITH_RC4_128_MD5");
+static const SSLCipherSuite Cipher33 = SSLCipherSuite(0x0022, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC, SSL_HASH_MD5, "TLS_KRB5_WITH_DES_CBC_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher34 = SSLCipherSuite(0x0023, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_3DES_EDE_CBC, SSL_HASH_MD5, "TLS_KRB5_WITH_3DES_EDE_CBC_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher35 = SSLCipherSuite(0x0024, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_128, SSL_HASH_MD5, "TLS_KRB5_WITH_RC4_128_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher36 = SSLCipherSuite(0x0025, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_IDEA_CBC, SSL_HASH_MD5, "TLS_KRB5_WITH_IDEA_CBC_MD5");
-static const SSLCipherSuite Cipher37 = SSLCipherSuite(0x0026, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC_40, SSL_HASH_SHA, "TLS_KRB5_EXPORT_WITH_DES_CBC_40_SHA");
-static const SSLCipherSuite Cipher38 = SSLCipherSuite(0x0027, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC2_CBC_40, SSL_HASH_SHA, "TLS_KRB5_EXPORT_WITH_RC2_CBC_40_SHA");
-static const SSLCipherSuite Cipher39 = SSLCipherSuite(0x0028, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_40, SSL_HASH_SHA, "TLS_KRB5_EXPORT_WITH_RC4_40_SHA");
-static const SSLCipherSuite Cipher40 = SSLCipherSuite(0x0029, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC_40, SSL_HASH_MD5, "TLS_KRB5_EXPORT_WITH_DES_CBC_40_MD5");
-static const SSLCipherSuite Cipher41 = SSLCipherSuite(0x002A, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC2_CBC_40, SSL_HASH_MD5, "TLS_KRB5_EXPORT_WITH_RC2_CBC_40_MD5");
-static const SSLCipherSuite Cipher42 = SSLCipherSuite(0x002B, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_40, SSL_HASH_MD5, "TLS_KRB5_EXPORT_WITH_RC4_40_MD5");
+static const SSLCipherSuite Cipher37 = SSLCipherSuite(0x0026, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC_40, SSL_HASH_SHA, "TLS_KRB5_EXPORT_WITH_DES_CBC_40_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher38 = SSLCipherSuite(0x0027, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC2_CBC_40, SSL_HASH_SHA, "TLS_KRB5_EXPORT_WITH_RC2_CBC_40_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher39 = SSLCipherSuite(0x0028, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_40, SSL_HASH_SHA, "TLS_KRB5_EXPORT_WITH_RC4_40_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher40 = SSLCipherSuite(0x0029, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_DES_CBC_40, SSL_HASH_MD5, "TLS_KRB5_EXPORT_WITH_DES_CBC_40_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher41 = SSLCipherSuite(0x002A, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC2_CBC_40, SSL_HASH_MD5, "TLS_KRB5_EXPORT_WITH_RC2_CBC_40_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher42 = SSLCipherSuite(0x002B, SSL_KEYX_KRB5, SSL_AUTH_KRB5, SSL_SYM_RC4_40, SSL_HASH_MD5, "TLS_KRB5_EXPORT_WITH_RC4_40_MD5"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher43 = SSLCipherSuite(0x002C, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_PSK_WITH_NULL_SHA");
 static const SSLCipherSuite Cipher44 = SSLCipherSuite(0x002D, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_NULL_SHA");
 static const SSLCipherSuite Cipher45 = SSLCipherSuite(0x002E, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_NULL_SHA");
@@ -103,16 +99,16 @@ static const SSLCipherSuite Cipher79 = SSLCipherSuite(0x0086, SSL_KEYX_DH, SSL_A
 static const SSLCipherSuite Cipher80 = SSLCipherSuite(0x0087, SSL_KEYX_DHE, SSL_AUTH_DSS, SSL_SYM_CAMELLIA_256_CBC, SSL_HASH_SHA, "TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA");
 static const SSLCipherSuite Cipher81 = SSLCipherSuite(0x0088, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_CAMELLIA_256_CBC, SSL_HASH_SHA, "TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA");
 static const SSLCipherSuite Cipher82 = SSLCipherSuite(0x0089, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_CAMELLIA_256_CBC, SSL_HASH_SHA, "TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA");
-static const SSLCipherSuite Cipher83 = SSLCipherSuite(0x008A, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_PSK_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher84 = SSLCipherSuite(0x008B, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_PSK_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher83 = SSLCipherSuite(0x008A, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_PSK_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher84 = SSLCipherSuite(0x008B, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_PSK_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher85 = SSLCipherSuite(0x008C, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_PSK_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher86 = SSLCipherSuite(0x008D, SSL_KEYX_PSK, SSL_AUTH_PSK, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_PSK_WITH_AES_256_CBC_SHA");
-static const SSLCipherSuite Cipher87 = SSLCipherSuite(0x008E, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher88 = SSLCipherSuite(0x008F, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher87 = SSLCipherSuite(0x008E, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher88 = SSLCipherSuite(0x008F, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher89 = SSLCipherSuite(0x0090, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher90 = SSLCipherSuite(0x0091, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_DHE_PSK_WITH_AES_256_CBC_SHA");
-static const SSLCipherSuite Cipher91 = SSLCipherSuite(0x0092, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher92 = SSLCipherSuite(0x0093, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher91 = SSLCipherSuite(0x0092, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher92 = SSLCipherSuite(0x0093, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher93 = SSLCipherSuite(0x0094, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher94 = SSLCipherSuite(0x0095, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_RSA_PSK_WITH_AES_256_CBC_SHA");
 static const SSLCipherSuite Cipher95 = SSLCipherSuite(0x0096, SSL_KEYX_RSA, SSL_AUTH_RSA, SSL_SYM_SEED_CBC, SSL_HASH_SHA, "TLS_RSA_WITH_SEED_CBC_SHA");
@@ -164,33 +160,33 @@ static const SSLCipherSuite Cipher140 = SSLCipherSuite(0x00C3, SSL_KEYX_DHE, SSL
 static const SSLCipherSuite Cipher141 = SSLCipherSuite(0x00C4, SSL_KEYX_DHE, SSL_AUTH_RSA, SSL_SYM_CAMELLIA_256_CBC, SSL_HASH_SHA256, "TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA256");
 static const SSLCipherSuite Cipher142 = SSLCipherSuite(0x00C5, SSL_KEYX_DH, SSL_AUTH_anon, SSL_SYM_CAMELLIA_256_CBC, SSL_HASH_SHA256, "TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA256");
 static const SSLCipherSuite Cipher143 = SSLCipherSuite(0xC001, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_NULL_SHA");
-static const SSLCipherSuite Cipher144 = SSLCipherSuite(0xC002, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher145 = SSLCipherSuite(0xC003, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher144 = SSLCipherSuite(0xC002, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher145 = SSLCipherSuite(0xC003, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher146 = SSLCipherSuite(0xC004, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher147 = SSLCipherSuite(0xC005, SSL_KEYX_ECDH, SSL_AUTH_ECDSA, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA");
 static const SSLCipherSuite Cipher148 = SSLCipherSuite(0xC006, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_NULL_SHA");
-static const SSLCipherSuite Cipher149 = SSLCipherSuite(0xC007, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher150 = SSLCipherSuite(0xC008, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher149 = SSLCipherSuite(0xC007, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher150 = SSLCipherSuite(0xC008, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher151 = SSLCipherSuite(0xC009, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher152 = SSLCipherSuite(0xC00A, SSL_KEYX_ECDHE, SSL_AUTH_ECDSA, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA");
 static const SSLCipherSuite Cipher153 = SSLCipherSuite(0xC00B, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_NULL_SHA");
-static const SSLCipherSuite Cipher154 = SSLCipherSuite(0xC00C, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher155 = SSLCipherSuite(0xC00D, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher154 = SSLCipherSuite(0xC00C, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher155 = SSLCipherSuite(0xC00D, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher156 = SSLCipherSuite(0xC00E, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher157 = SSLCipherSuite(0xC00F, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_ECDH_RSA_WITH_AES_256_CBC_SHA");
 static const SSLCipherSuite Cipher158 = SSLCipherSuite(0xC010, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_NULL_SHA");
-static const SSLCipherSuite Cipher159 = SSLCipherSuite(0xC011, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher160 = SSLCipherSuite(0xC012, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher159 = SSLCipherSuite(0xC011, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher160 = SSLCipherSuite(0xC012, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher161 = SSLCipherSuite(0xC013, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher162 = SSLCipherSuite(0xC014, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA");
 static const SSLCipherSuite Cipher163 = SSLCipherSuite(0xC015, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_NULL, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_NULL_SHA");
-static const SSLCipherSuite Cipher164 = SSLCipherSuite(0xC016, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher165 = SSLCipherSuite(0xC017, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher164 = SSLCipherSuite(0xC016, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher165 = SSLCipherSuite(0xC017, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher166 = SSLCipherSuite(0xC018, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher167 = SSLCipherSuite(0xC019, SSL_KEYX_ECDH, SSL_AUTH_anon, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_ECDH_anon_WITH_AES_256_CBC_SHA");
-static const SSLCipherSuite Cipher168 = SSLCipherSuite(0xC01A, SSL_KEYX_SRP, SSL_AUTH_SHA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_WITH_3DES_EDE_CBC_SHA");
-static const SSLCipherSuite Cipher169 = SSLCipherSuite(0xC01B, SSL_KEYX_SRP, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA");
-static const SSLCipherSuite Cipher170 = SSLCipherSuite(0xC01C, SSL_KEYX_SRP, SSL_AUTH_DSS, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher168 = SSLCipherSuite(0xC01A, SSL_KEYX_SRP, SSL_AUTH_SHA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher169 = SSLCipherSuite(0xC01B, SSL_KEYX_SRP, SSL_AUTH_RSA, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher170 = SSLCipherSuite(0xC01C, SSL_KEYX_SRP, SSL_AUTH_DSS, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher171 = SSLCipherSuite(0xC01D, SSL_KEYX_SRP, SSL_AUTH_SHA, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher172 = SSLCipherSuite(0xC01E, SSL_KEYX_SRP, SSL_AUTH_RSA, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher173 = SSLCipherSuite(0xC01F, SSL_KEYX_SRP, SSL_AUTH_DSS, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA");
@@ -213,8 +209,8 @@ static const SSLCipherSuite Cipher189 = SSLCipherSuite(0xC02F, SSL_KEYX_ECDHE, S
 static const SSLCipherSuite Cipher190 = SSLCipherSuite(0xC030, SSL_KEYX_ECDHE, SSL_AUTH_RSA, SSL_SYM_AES_256_GCM, SSL_HASH_SHA384, "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
 static const SSLCipherSuite Cipher191 = SSLCipherSuite(0xC031, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_AES_128_GCM, SSL_HASH_SHA256, "TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256");
 static const SSLCipherSuite Cipher192 = SSLCipherSuite(0xC032, SSL_KEYX_ECDH, SSL_AUTH_RSA, SSL_SYM_AES_256_GCM, SSL_HASH_SHA384, "TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384");
-static const SSLCipherSuite Cipher193 = SSLCipherSuite(0xC033, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDHE_PSK_WITH_RC4_128_SHA");
-static const SSLCipherSuite Cipher194 = SSLCipherSuite(0xC034, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA");
+static const SSLCipherSuite Cipher193 = SSLCipherSuite(0xC033, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_RC4_128, SSL_HASH_SHA, "TLS_ECDHE_PSK_WITH_RC4_128_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
+static const SSLCipherSuite Cipher194 = SSLCipherSuite(0xC034, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_3DES_EDE_CBC, SSL_HASH_SHA, "TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA"); // lgtm [cpp/weak-cryptographic-algorithm]
 static const SSLCipherSuite Cipher195 = SSLCipherSuite(0xC035, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_AES_128_CBC, SSL_HASH_SHA, "TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA");
 static const SSLCipherSuite Cipher196 = SSLCipherSuite(0xC036, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_AES_256_CBC, SSL_HASH_SHA, "TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA");
 static const SSLCipherSuite Cipher197 = SSLCipherSuite(0xC037, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_AES_128_CBC, SSL_HASH_SHA256, "TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256");
@@ -345,6 +341,11 @@ static const SSLCipherSuite Cipher321 = SSLCipherSuite(0xCCAB, SSL_KEYX_PSK, SSL
 static const SSLCipherSuite Cipher322 = SSLCipherSuite(0xCCAC, SSL_KEYX_ECDHE, SSL_AUTH_PSK, SSL_SYM_CHACHA20_POLY1305, SSL_HASH_SHA256, "TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256");
 static const SSLCipherSuite Cipher323 = SSLCipherSuite(0xCCAD, SSL_KEYX_DHE, SSL_AUTH_PSK, SSL_SYM_CHACHA20_POLY1305, SSL_HASH_SHA256, "TLS_DHE_PSK_WITH_CHACHA20_POLY1305_SHA256");
 static const SSLCipherSuite Cipher324 = SSLCipherSuite(0xCCAE, SSL_KEYX_RSA, SSL_AUTH_PSK, SSL_SYM_CHACHA20_POLY1305, SSL_HASH_SHA256, "TLS_RSA_PSK_WITH_CHACHA20_POLY1305_SHA256");
+static const SSLCipherSuite Cipher325 = SSLCipherSuite(0x1301, SSL_KEYX_NULL, SSL_AUTH_NULL, SSL_SYM_AES_128_GCM, SSL_HASH_SHA256, "TLS_AES_128_GCM_SHA256");
+static const SSLCipherSuite Cipher326 = SSLCipherSuite(0x1302, SSL_KEYX_NULL, SSL_AUTH_NULL, SSL_SYM_AES_256_GCM, SSL_HASH_SHA384, "TLS_AES_256_GCM_SHA384");
+static const SSLCipherSuite Cipher327 = SSLCipherSuite(0x1303, SSL_KEYX_NULL, SSL_AUTH_NULL, SSL_SYM_CHACHA20_POLY1305, SSL_HASH_SHA256, "TLS_CHACHA20_POLY1305_SHA256");
+static const SSLCipherSuite Cipher328 = SSLCipherSuite(0x1304, SSL_KEYX_NULL, SSL_AUTH_NULL, SSL_SYM_AES_128_CCM, SSL_HASH_SHA256, "TLS_AES_128_CCM_SHA256");
+static const SSLCipherSuite Cipher329 = SSLCipherSuite(0x1305, SSL_KEYX_NULL, SSL_AUTH_NULL, SSL_SYM_AES_128_CCM_8, SSL_HASH_SHA256, "TLS_AES_128_CCM_8_SHA256");
 
 
 static std::map<uint16_t, SSLCipherSuite*> createCipherSuiteIdToObjectMap()
@@ -675,362 +676,394 @@ static std::map<uint16_t, SSLCipherSuite*> createCipherSuiteIdToObjectMap()
 	result[0xCCAC] = (SSLCipherSuite*)&Cipher322;
 	result[0xCCAD] = (SSLCipherSuite*)&Cipher323;
 	result[0xCCAE] = (SSLCipherSuite*)&Cipher324;
+	result[0x1301] = (SSLCipherSuite*)&Cipher325;
+	result[0x1302] = (SSLCipherSuite*)&Cipher326;
+	result[0x1303] = (SSLCipherSuite*)&Cipher327;
+	result[0x1304] = (SSLCipherSuite*)&Cipher328;
+	result[0x1305] = (SSLCipherSuite*)&Cipher329;
+	return result;
+}
+
+#define A 54059 /* a prime */
+#define B 76963 /* another prime */
+#define C 86969 /* yet another prime */
+#define FIRST_HASH 37 /* also prime */
+static uint32_t hashString(std::string str)
+{
+	unsigned h = FIRST_HASH;
+	for(std::string::size_type i = 0; i < str.size(); ++i)
+	{
+		h = (h * A) ^ (str[i] * B);
+	}
+	return h;
+}
+
+static std::map<uint32_t, SSLCipherSuite*> createCipherSuiteStringToObjectMap()
+{
+	std::map<uint32_t, SSLCipherSuite*> result;
+
+	result[0x9F180F43] = (SSLCipherSuite*)&Cipher1;
+	result[0x97D9341F] = (SSLCipherSuite*)&Cipher2;
+	result[0x288FABA1] = (SSLCipherSuite*)&Cipher3;
+	result[0x9179C5BD] = (SSLCipherSuite*)&Cipher4;
+	result[0x68DF0C8F] = (SSLCipherSuite*)&Cipher5;
+	result[0x5FB32DF1] = (SSLCipherSuite*)&Cipher6;
+	result[0x2A1FC0FC] = (SSLCipherSuite*)&Cipher7;
+	result[0x5BF6459E] = (SSLCipherSuite*)&Cipher8;
+	result[0x60D692F4] = (SSLCipherSuite*)&Cipher9;
+	result[0x26A21427] = (SSLCipherSuite*)&Cipher10;
+	result[0xD3558C6D] = (SSLCipherSuite*)&Cipher11;
+	result[0xAE2673E9] = (SSLCipherSuite*)&Cipher12;
+	result[0xC63B19B0] = (SSLCipherSuite*)&Cipher13;
+	result[0xFE49B3BC] = (SSLCipherSuite*)&Cipher14;
+	result[0x625A86D5] = (SSLCipherSuite*)&Cipher15;
+	result[0x60FF1BD4] = (SSLCipherSuite*)&Cipher16;
+	result[0xE101D5C8] = (SSLCipherSuite*)&Cipher17;
+	result[0x422859E8] = (SSLCipherSuite*)&Cipher18;
+	result[0x88ABC503] = (SSLCipherSuite*)&Cipher19;
+	result[0x44284B1] = (SSLCipherSuite*)&Cipher20;
+	result[0xFD71B064] = (SSLCipherSuite*)&Cipher21;
+	result[0x76F35237] = (SSLCipherSuite*)&Cipher22;
+	result[0x7D93159D] = (SSLCipherSuite*)&Cipher23;
+	result[0x6E9D1AE2] = (SSLCipherSuite*)&Cipher24;
+	result[0xFA0974E4] = (SSLCipherSuite*)&Cipher25;
+	result[0xEC27ACB1] = (SSLCipherSuite*)&Cipher26;
+	result[0x6859C7A8] = (SSLCipherSuite*)&Cipher27;
+	result[0x55FD3D14] = (SSLCipherSuite*)&Cipher28;
+	result[0xA7650023] = (SSLCipherSuite*)&Cipher29;
+	result[0xDC042011] = (SSLCipherSuite*)&Cipher30;
+	result[0x94BFBF4D] = (SSLCipherSuite*)&Cipher31;
+	result[0x2FE24162] = (SSLCipherSuite*)&Cipher32;
+	result[0xC449D595] = (SSLCipherSuite*)&Cipher33;
+	result[0xE11292AF] = (SSLCipherSuite*)&Cipher34;
+	result[0x47D0643] = (SSLCipherSuite*)&Cipher35;
+	result[0xC9ABBA3C] = (SSLCipherSuite*)&Cipher36;
+	result[0x9F323A5F] = (SSLCipherSuite*)&Cipher37;
+	result[0xFBF78046] = (SSLCipherSuite*)&Cipher38;
+	result[0x859BD79F] = (SSLCipherSuite*)&Cipher39;
+	result[0xF9FBBB39] = (SSLCipherSuite*)&Cipher40;
+	result[0x63587748] = (SSLCipherSuite*)&Cipher41;
+	result[0xF84CAE79] = (SSLCipherSuite*)&Cipher42;
+	result[0xCA39F6F1] = (SSLCipherSuite*)&Cipher43;
+	result[0xDC4D17C1] = (SSLCipherSuite*)&Cipher44;
+	result[0x955FBE28] = (SSLCipherSuite*)&Cipher45;
+	result[0x73ED7B86] = (SSLCipherSuite*)&Cipher46;
+	result[0x14A51855] = (SSLCipherSuite*)&Cipher47;
+	result[0x2CE54061] = (SSLCipherSuite*)&Cipher48;
+	result[0x3360789A] = (SSLCipherSuite*)&Cipher49;
+	result[0xDFEF59B6] = (SSLCipherSuite*)&Cipher50;
+	result[0xE819855D] = (SSLCipherSuite*)&Cipher51;
+	result[0x24CC3946] = (SSLCipherSuite*)&Cipher52;
+	result[0x1CACB5FD] = (SSLCipherSuite*)&Cipher53;
+	result[0x40193001] = (SSLCipherSuite*)&Cipher54;
+	result[0xA3846DA2] = (SSLCipherSuite*)&Cipher55;
+	result[0x8F3B7CF6] = (SSLCipherSuite*)&Cipher56;
+	result[0xC7B09945] = (SSLCipherSuite*)&Cipher57;
+	result[0xD8172F82] = (SSLCipherSuite*)&Cipher58;
+	result[0xB6748503] = (SSLCipherSuite*)&Cipher59;
+	result[0xDB105043] = (SSLCipherSuite*)&Cipher60;
+	result[0x21E8AC2E] = (SSLCipherSuite*)&Cipher61;
+	result[0x55096FC2] = (SSLCipherSuite*)&Cipher62;
+	result[0x38F955AF] = (SSLCipherSuite*)&Cipher63;
+	result[0xBA8C1D77] = (SSLCipherSuite*)&Cipher64;
+	result[0x91128102] = (SSLCipherSuite*)&Cipher65;
+	result[0xA7ED740E] = (SSLCipherSuite*)&Cipher66;
+	result[0x75C4908B] = (SSLCipherSuite*)&Cipher67;
+	result[0xBC6C5E87] = (SSLCipherSuite*)&Cipher68;
+	result[0xA0499A2A] = (SSLCipherSuite*)&Cipher69;
+	result[0x4F0FFC13] = (SSLCipherSuite*)&Cipher70;
+	result[0xCCEE9996] = (SSLCipherSuite*)&Cipher71;
+	result[0x8570DA22] = (SSLCipherSuite*)&Cipher72;
+	result[0x75D4FD57] = (SSLCipherSuite*)&Cipher73;
+	result[0x602E04D3] = (SSLCipherSuite*)&Cipher74;
+	result[0x5EDC9C36] = (SSLCipherSuite*)&Cipher75;
+	result[0xE66C167E] = (SSLCipherSuite*)&Cipher76;
+	result[0x909F6D7B] = (SSLCipherSuite*)&Cipher77;
+	result[0x3C35B1AA] = (SSLCipherSuite*)&Cipher78;
+	result[0x6D4D1A2E] = (SSLCipherSuite*)&Cipher79;
+	result[0xBF788317] = (SSLCipherSuite*)&Cipher80;
+	result[0x5329738B] = (SSLCipherSuite*)&Cipher81;
+	result[0x7D11AB2] = (SSLCipherSuite*)&Cipher82;
+	result[0x461ACA21] = (SSLCipherSuite*)&Cipher83;
+	result[0x15404ADD] = (SSLCipherSuite*)&Cipher84;
+	result[0x3806AF6] = (SSLCipherSuite*)&Cipher85;
+	result[0xB2D80EB6] = (SSLCipherSuite*)&Cipher86;
+	result[0xE54425D1] = (SSLCipherSuite*)&Cipher87;
+	result[0x476457CD] = (SSLCipherSuite*)&Cipher88;
+	result[0x1D55E526] = (SSLCipherSuite*)&Cipher89;
+	result[0x953C69E6] = (SSLCipherSuite*)&Cipher90;
+	result[0x6ADE7E16] = (SSLCipherSuite*)&Cipher91;
+	result[0xE8C7BBE8] = (SSLCipherSuite*)&Cipher92;
+	result[0x623DC741] = (SSLCipherSuite*)&Cipher93;
+	result[0xF403E1] = (SSLCipherSuite*)&Cipher94;
+	result[0x90D8CADC] = (SSLCipherSuite*)&Cipher95;
+	result[0xC30D1199] = (SSLCipherSuite*)&Cipher96;
+	result[0x9CFB1B5D] = (SSLCipherSuite*)&Cipher97;
+	result[0x2D3B99E8] = (SSLCipherSuite*)&Cipher98;
+	result[0x4A9E8B0C] = (SSLCipherSuite*)&Cipher99;
+	result[0x16BD2351] = (SSLCipherSuite*)&Cipher100;
+	result[0x586BC20E] = (SSLCipherSuite*)&Cipher101;
+	result[0x996B90AA] = (SSLCipherSuite*)&Cipher102;
+	result[0x2F3871FE] = (SSLCipherSuite*)&Cipher103;
+	result[0xF2DD519A] = (SSLCipherSuite*)&Cipher104;
+	result[0x52615F23] = (SSLCipherSuite*)&Cipher105;
+	result[0xDEE51337] = (SSLCipherSuite*)&Cipher106;
+	result[0xB30890E2] = (SSLCipherSuite*)&Cipher107;
+	result[0x40F3FF3E] = (SSLCipherSuite*)&Cipher108;
+	result[0xE306EE17] = (SSLCipherSuite*)&Cipher109;
+	result[0x870C6FCB] = (SSLCipherSuite*)&Cipher110;
+	result[0xEB12CAEF] = (SSLCipherSuite*)&Cipher111;
+	result[0x68795983] = (SSLCipherSuite*)&Cipher112;
+	result[0x606BA9BE] = (SSLCipherSuite*)&Cipher113;
+	result[0x2C33475A] = (SSLCipherSuite*)&Cipher114;
+	result[0x640CAAEE] = (SSLCipherSuite*)&Cipher115;
+	result[0x6603488A] = (SSLCipherSuite*)&Cipher116;
+	result[0x8BA58643] = (SSLCipherSuite*)&Cipher117;
+	result[0x16059E57] = (SSLCipherSuite*)&Cipher118;
+	result[0x1B0606D3] = (SSLCipherSuite*)&Cipher119;
+	result[0x1CF76007] = (SSLCipherSuite*)&Cipher120;
+	result[0x618CE8F2] = (SSLCipherSuite*)&Cipher121;
+	result[0xE264D3B6] = (SSLCipherSuite*)&Cipher122;
+	result[0xB4C5AE63] = (SSLCipherSuite*)&Cipher123;
+	result[0x95DF4757] = (SSLCipherSuite*)&Cipher124;
+	result[0x1D1CF062] = (SSLCipherSuite*)&Cipher125;
+	result[0xE7AA2826] = (SSLCipherSuite*)&Cipher126;
+	result[0x38D94EE2] = (SSLCipherSuite*)&Cipher127;
+	result[0x889BA306] = (SSLCipherSuite*)&Cipher128;
+	result[0x5B816E75] = (SSLCipherSuite*)&Cipher129;
+	result[0x6F18C4DD] = (SSLCipherSuite*)&Cipher130;
+	result[0x2E1C05E0] = (SSLCipherSuite*)&Cipher131;
+	result[0x5592CFF7] = (SSLCipherSuite*)&Cipher132;
+	result[0x8221D38B] = (SSLCipherSuite*)&Cipher133;
+	result[0x9538105C] = (SSLCipherSuite*)&Cipher134;
+	result[0xF1100DD0] = (SSLCipherSuite*)&Cipher135;
+	result[0xF492EF1F] = (SSLCipherSuite*)&Cipher136;
+	result[0x226BD52C] = (SSLCipherSuite*)&Cipher137;
+	result[0xBBACE99F] = (SSLCipherSuite*)&Cipher138;
+	result[0xB3D4B66B] = (SSLCipherSuite*)&Cipher139;
+	result[0x8C619440] = (SSLCipherSuite*)&Cipher140;
+	result[0xE60B95C] = (SSLCipherSuite*)&Cipher141;
+	result[0x24F48D07] = (SSLCipherSuite*)&Cipher142;
+	result[0x15C7AF26] = (SSLCipherSuite*)&Cipher143;
+	result[0xCBA219CC] = (SSLCipherSuite*)&Cipher144;
+	result[0x9BD946BE] = (SSLCipherSuite*)&Cipher145;
+	result[0x7CCA46FF] = (SSLCipherSuite*)&Cipher146;
+	result[0x9FB51FA3] = (SSLCipherSuite*)&Cipher147;
+	result[0xC82A275B] = (SSLCipherSuite*)&Cipher148;
+	result[0x4472A583] = (SSLCipherSuite*)&Cipher149;
+	result[0xDBA3A5CF] = (SSLCipherSuite*)&Cipher150;
+	result[0x86338128] = (SSLCipherSuite*)&Cipher151;
+	result[0x8CCE91E4] = (SSLCipherSuite*)&Cipher152;
+	result[0xA81C6CA0] = (SSLCipherSuite*)&Cipher153;
+	result[0x6D80815E] = (SSLCipherSuite*)&Cipher154;
+	result[0xA383DEB0] = (SSLCipherSuite*)&Cipher155;
+	result[0x52073879] = (SSLCipherSuite*)&Cipher156;
+	result[0x5BA0B279] = (SSLCipherSuite*)&Cipher157;
+	result[0xD787CCC9] = (SSLCipherSuite*)&Cipher158;
+	result[0x9C86C6A9] = (SSLCipherSuite*)&Cipher159;
+	result[0xDAE424E5] = (SSLCipherSuite*)&Cipher160;
+	result[0x72C15ECE] = (SSLCipherSuite*)&Cipher161;
+	result[0xF0E8FB6E] = (SSLCipherSuite*)&Cipher162;
+	result[0xA2005D44] = (SSLCipherSuite*)&Cipher163;
+	result[0x77F79962] = (SSLCipherSuite*)&Cipher164;
+	result[0x25C8184C] = (SSLCipherSuite*)&Cipher165;
+	result[0x2070F8A5] = (SSLCipherSuite*)&Cipher166;
+	result[0x4189ED8D] = (SSLCipherSuite*)&Cipher167;
+	result[0x94C21B1] = (SSLCipherSuite*)&Cipher168;
+	result[0x1B0CB25C] = (SSLCipherSuite*)&Cipher169;
+	result[0xF18127A0] = (SSLCipherSuite*)&Cipher170;
+	result[0xC7FCA79A] = (SSLCipherSuite*)&Cipher171;
+	result[0xC1DEE135] = (SSLCipherSuite*)&Cipher172;
+	result[0xDA7143E9] = (SSLCipherSuite*)&Cipher173;
+	result[0xE82B6A2] = (SSLCipherSuite*)&Cipher174;
+	result[0x438EC1DD] = (SSLCipherSuite*)&Cipher175;
+	result[0x6BE32FA9] = (SSLCipherSuite*)&Cipher176;
+	result[0x18A5C375] = (SSLCipherSuite*)&Cipher177;
+	result[0x24136C59] = (SSLCipherSuite*)&Cipher178;
+	result[0x88529408] = (SSLCipherSuite*)&Cipher179;
+	result[0xADAB33FC] = (SSLCipherSuite*)&Cipher180;
+	result[0x79407DCB] = (SSLCipherSuite*)&Cipher181;
+	result[0x64970FFF] = (SSLCipherSuite*)&Cipher182;
+	result[0x8260DC9A] = (SSLCipherSuite*)&Cipher183;
+	result[0x4B74FFFE] = (SSLCipherSuite*)&Cipher184;
+	result[0x350DD5C8] = (SSLCipherSuite*)&Cipher185;
+	result[0x53E057C] = (SSLCipherSuite*)&Cipher186;
+	result[0x266020E1] = (SSLCipherSuite*)&Cipher187;
+	result[0xE6DB4B9D] = (SSLCipherSuite*)&Cipher188;
+	result[0x5A992E6] = (SSLCipherSuite*)&Cipher189;
+	result[0x1B33C882] = (SSLCipherSuite*)&Cipher190;
+	result[0x33579D2B] = (SSLCipherSuite*)&Cipher191;
+	result[0x1BD7F7FF] = (SSLCipherSuite*)&Cipher192;
+	result[0x39C59ED9] = (SSLCipherSuite*)&Cipher193;
+	result[0x4F19FB95] = (SSLCipherSuite*)&Cipher194;
+	result[0x8F4737BE] = (SSLCipherSuite*)&Cipher195;
+	result[0x2567AA9E] = (SSLCipherSuite*)&Cipher196;
+	result[0xEEF843DB] = (SSLCipherSuite*)&Cipher197;
+	result[0x978C4E4F] = (SSLCipherSuite*)&Cipher198;
+	result[0x2F8D17D9] = (SSLCipherSuite*)&Cipher199;
+	result[0x7F80393A] = (SSLCipherSuite*)&Cipher200;
+	result[0xDCA5AE1E] = (SSLCipherSuite*)&Cipher201;
+	result[0x74AA95D7] = (SSLCipherSuite*)&Cipher202;
+	result[0xB93174BB] = (SSLCipherSuite*)&Cipher203;
+	result[0x46E274FC] = (SSLCipherSuite*)&Cipher204;
+	result[0x9DC85330] = (SSLCipherSuite*)&Cipher205;
+	result[0x972847B8] = (SSLCipherSuite*)&Cipher206;
+	result[0xFCF61DAC] = (SSLCipherSuite*)&Cipher207;
+	result[0x73C0029B] = (SSLCipherSuite*)&Cipher208;
+	result[0xDA41D70F] = (SSLCipherSuite*)&Cipher209;
+	result[0x12CBC4E7] = (SSLCipherSuite*)&Cipher210;
+	result[0x8B2D5ACB] = (SSLCipherSuite*)&Cipher211;
+	result[0x28C0C084] = (SSLCipherSuite*)&Cipher212;
+	result[0x1602C1F8] = (SSLCipherSuite*)&Cipher213;
+	result[0xF5FB9ED] = (SSLCipherSuite*)&Cipher214;
+	result[0xE8E30E91] = (SSLCipherSuite*)&Cipher215;
+	result[0x70BA7792] = (SSLCipherSuite*)&Cipher216;
+	result[0x94C38076] = (SSLCipherSuite*)&Cipher217;
+	result[0xE5B3483F] = (SSLCipherSuite*)&Cipher218;
+	result[0x892DEBE3] = (SSLCipherSuite*)&Cipher219;
+	result[0x65609E50] = (SSLCipherSuite*)&Cipher220;
+	result[0xAB4F3F04] = (SSLCipherSuite*)&Cipher221;
+	result[0x8BFC76DA] = (SSLCipherSuite*)&Cipher222;
+	result[0xD4BDCD6] = (SSLCipherSuite*)&Cipher223;
+	result[0xCAB8F54A] = (SSLCipherSuite*)&Cipher224;
+	result[0xA10DCFC6] = (SSLCipherSuite*)&Cipher225;
+	result[0xD6B71B71] = (SSLCipherSuite*)&Cipher226;
+	result[0x6D775A2D] = (SSLCipherSuite*)&Cipher227;
+	result[0x7997AD16] = (SSLCipherSuite*)&Cipher228;
+	result[0x5338C632] = (SSLCipherSuite*)&Cipher229;
+	result[0x45F0598D] = (SSLCipherSuite*)&Cipher230;
+	result[0x2D8B6A99] = (SSLCipherSuite*)&Cipher231;
+	result[0xE14DC125] = (SSLCipherSuite*)&Cipher232;
+	result[0x1538351] = (SSLCipherSuite*)&Cipher233;
+	result[0x1A8CE530] = (SSLCipherSuite*)&Cipher234;
+	result[0xB01E69C4] = (SSLCipherSuite*)&Cipher235;
+	result[0xCCBF70D3] = (SSLCipherSuite*)&Cipher236;
+	result[0xEF664FE7] = (SSLCipherSuite*)&Cipher237;
+	result[0xF6ED4F52] = (SSLCipherSuite*)&Cipher238;
+	result[0x7D6522E] = (SSLCipherSuite*)&Cipher239;
+	result[0xBDB5C9B9] = (SSLCipherSuite*)&Cipher240;
+	result[0xD98D5C95] = (SSLCipherSuite*)&Cipher241;
+	result[0x92B92727] = (SSLCipherSuite*)&Cipher242;
+	result[0xB4FE570B] = (SSLCipherSuite*)&Cipher243;
+	result[0x8DCF7F77] = (SSLCipherSuite*)&Cipher244;
+	result[0x8208545B] = (SSLCipherSuite*)&Cipher245;
+	result[0x39A13298] = (SSLCipherSuite*)&Cipher246;
+	result[0xECB7070C] = (SSLCipherSuite*)&Cipher247;
+	result[0xAFA95F8A] = (SSLCipherSuite*)&Cipher248;
+	result[0x3D80E106] = (SSLCipherSuite*)&Cipher249;
+	result[0x83AF9B7A] = (SSLCipherSuite*)&Cipher250;
+	result[0x1FAAC2F6] = (SSLCipherSuite*)&Cipher251;
+	result[0x2AF11F51] = (SSLCipherSuite*)&Cipher252;
+	result[0xEDFD300D] = (SSLCipherSuite*)&Cipher253;
+	result[0x91AA268F] = (SSLCipherSuite*)&Cipher254;
+	result[0x9DF0E933] = (SSLCipherSuite*)&Cipher255;
+	result[0xF3951A6A] = (SSLCipherSuite*)&Cipher256;
+	result[0xE4FF8DCE] = (SSLCipherSuite*)&Cipher257;
+	result[0xBE4DFC61] = (SSLCipherSuite*)&Cipher258;
+	result[0xBB2CF025] = (SSLCipherSuite*)&Cipher259;
+	result[0x354D38A8] = (SSLCipherSuite*)&Cipher260;
+	result[0xE2444B9C] = (SSLCipherSuite*)&Cipher261;
+	result[0xF8298D43] = (SSLCipherSuite*)&Cipher262;
+	result[0x3EC413B7] = (SSLCipherSuite*)&Cipher263;
+	result[0xE0C75BE9] = (SSLCipherSuite*)&Cipher264;
+	result[0x7191BE45] = (SSLCipherSuite*)&Cipher265;
+	result[0xDDE7C439] = (SSLCipherSuite*)&Cipher266;
+	result[0xBE715415] = (SSLCipherSuite*)&Cipher267;
+	result[0x6CF8F9A6] = (SSLCipherSuite*)&Cipher268;
+	result[0x36D61242] = (SSLCipherSuite*)&Cipher269;
+	result[0xFA9BA9ED] = (SSLCipherSuite*)&Cipher270;
+	result[0x4588B179] = (SSLCipherSuite*)&Cipher271;
+	result[0xB3C246FA] = (SSLCipherSuite*)&Cipher272;
+	result[0x750EEB76] = (SSLCipherSuite*)&Cipher273;
+	result[0xC50ACCB2] = (SSLCipherSuite*)&Cipher274;
+	result[0x9555CD0E] = (SSLCipherSuite*)&Cipher275;
+	result[0xF25A659B] = (SSLCipherSuite*)&Cipher276;
+	result[0x1670E72F] = (SSLCipherSuite*)&Cipher277;
+	result[0xDB0DD6BC] = (SSLCipherSuite*)&Cipher278;
+	result[0x19CACD70] = (SSLCipherSuite*)&Cipher279;
+	result[0xC54D5481] = (SSLCipherSuite*)&Cipher280;
+	result[0x7BCCA2BD] = (SSLCipherSuite*)&Cipher281;
+	result[0xA851374E] = (SSLCipherSuite*)&Cipher282;
+	result[0xE887BEA] = (SSLCipherSuite*)&Cipher283;
+	result[0xDECAA7F9] = (SSLCipherSuite*)&Cipher284;
+	result[0x29DA73D5] = (SSLCipherSuite*)&Cipher285;
+	result[0xAC69ECC9] = (SSLCipherSuite*)&Cipher286;
+	result[0x6AE55625] = (SSLCipherSuite*)&Cipher287;
+	result[0x2BB24546] = (SSLCipherSuite*)&Cipher288;
+	result[0x7AB5F262] = (SSLCipherSuite*)&Cipher289;
+	result[0x3DB83990] = (SSLCipherSuite*)&Cipher290;
+	result[0xC852A244] = (SSLCipherSuite*)&Cipher291;
+	result[0xA3C952C0] = (SSLCipherSuite*)&Cipher292;
+	result[0xAF630C34] = (SSLCipherSuite*)&Cipher293;
+	result[0xD4EE22B] = (SSLCipherSuite*)&Cipher294;
+	result[0x83F4C5DF] = (SSLCipherSuite*)&Cipher295;
+	result[0xCCF6F918] = (SSLCipherSuite*)&Cipher296;
+	result[0x955C9E8C] = (SSLCipherSuite*)&Cipher297;
+	result[0xF3559154] = (SSLCipherSuite*)&Cipher298;
+	result[0xE0991C14] = (SSLCipherSuite*)&Cipher299;
+	result[0x7F6BF424] = (SSLCipherSuite*)&Cipher300;
+	result[0x4A129264] = (SSLCipherSuite*)&Cipher301;
+	result[0xB25E29E3] = (SSLCipherSuite*)&Cipher302;
+	result[0xA6E15A23] = (SSLCipherSuite*)&Cipher303;
+	result[0x637C5C53] = (SSLCipherSuite*)&Cipher304;
+	result[0x22794513] = (SSLCipherSuite*)&Cipher305;
+	result[0x4CE30464] = (SSLCipherSuite*)&Cipher306;
+	result[0xFDFE3B24] = (SSLCipherSuite*)&Cipher307;
+	result[0xDC8A2074] = (SSLCipherSuite*)&Cipher308;
+	result[0xFD448934] = (SSLCipherSuite*)&Cipher309;
+	result[0xF4FC2B13] = (SSLCipherSuite*)&Cipher310;
+	result[0xB10ECD53] = (SSLCipherSuite*)&Cipher311;
+	result[0xF44F4BC7] = (SSLCipherSuite*)&Cipher312;
+	result[0x49AF0BF] = (SSLCipherSuite*)&Cipher313;
+	result[0xDFAF479A] = (SSLCipherSuite*)&Cipher314;
+	result[0x82BF78CE] = (SSLCipherSuite*)&Cipher315;
+	result[0x46CD83C9] = (SSLCipherSuite*)&Cipher316;
+	result[0x8F7D7465] = (SSLCipherSuite*)&Cipher317;
+	result[0xBD9CDFE5] = (SSLCipherSuite*)&Cipher318;
+	result[0x92942203] = (SSLCipherSuite*)&Cipher319;
+	result[0x783C98AD] = (SSLCipherSuite*)&Cipher320;
+	result[0x92213B6D] = (SSLCipherSuite*)&Cipher321;
+	result[0xCFCB1A55] = (SSLCipherSuite*)&Cipher322;
+	result[0x54C2D55D] = (SSLCipherSuite*)&Cipher323;
+	result[0xDCD6F114] = (SSLCipherSuite*)&Cipher324;
+	result[0x6AD23C40] = (SSLCipherSuite*)&Cipher325;
+	result[0x5F5239D4] = (SSLCipherSuite*)&Cipher326;
+	result[0xAB27704B] = (SSLCipherSuite*)&Cipher327;
+	result[0xA3178D0C] = (SSLCipherSuite*)&Cipher328;
+	result[0x5DAAA195] = (SSLCipherSuite*)&Cipher329;
 
 	return result;
 }
 
-static std::map<std::string, SSLCipherSuite*> createCipherSuiteStringToObjectMap()
+std::set<uint16_t> createGreaseSet()
 {
-	std::map<std::string, SSLCipherSuite*> result;
-
-	result["TLS_NULL_WITH_NULL_NULL"] = (SSLCipherSuite*)&Cipher1;
-	result["TLS_RSA_WITH_NULL_MD5"] = (SSLCipherSuite*)&Cipher2;
-	result["TLS_RSA_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher3;
-	result["TLS_RSA_EXPORT_WITH_RC4_40_MD5"] = (SSLCipherSuite*)&Cipher4;
-	result["TLS_RSA_WITH_RC4_128_MD5"] = (SSLCipherSuite*)&Cipher5;
-	result["TLS_RSA_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher6;
-	result["TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5"] = (SSLCipherSuite*)&Cipher7;
-	result["TLS_RSA_WITH_IDEA_CBC_SHA"] = (SSLCipherSuite*)&Cipher8;
-	result["TLS_RSA_EXPORT_WITH_DES40_CBC_SHA"] = (SSLCipherSuite*)&Cipher9;
-	result["TLS_RSA_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher10;
-	result["TLS_RSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher11;
-	result["TLS_DH_DSS_EXPORT_WITH_DES40_CBC_SHA"] = (SSLCipherSuite*)&Cipher12;
-	result["TLS_DH_DSS_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher13;
-	result["TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher14;
-	result["TLS_DH_RSA_EXPORT_WITH_DES40_CBC_SHA"] = (SSLCipherSuite*)&Cipher15;
-	result["TLS_DH_RSA_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher16;
-	result["TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher17;
-	result["TLS_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA"] = (SSLCipherSuite*)&Cipher18;
-	result["TLS_DHE_DSS_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher19;
-	result["TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher20;
-	result["TLS_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA"] = (SSLCipherSuite*)&Cipher21;
-	result["TLS_DHE_RSA_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher22;
-	result["TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher23;
-	result["TLS_DH_anon_EXPORT_WITH_RC4_40_MD5"] = (SSLCipherSuite*)&Cipher24;
-	result["TLS_DH_anon_WITH_RC4_128_MD5"] = (SSLCipherSuite*)&Cipher25;
-	result["TLS_DH_anon_EXPORT_WITH_DES40_CBC_SHA"] = (SSLCipherSuite*)&Cipher26;
-	result["TLS_DH_anon_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher27;
-	result["TLS_DH_anon_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher28;
-	result["TLS_KRB5_WITH_DES_CBC_SHA"] = (SSLCipherSuite*)&Cipher29;
-	result["TLS_KRB5_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher30;
-	result["TLS_KRB5_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher31;
-	result["TLS_KRB5_WITH_IDEA_CBC_SHA"] = (SSLCipherSuite*)&Cipher32;
-	result["TLS_KRB5_WITH_DES_CBC_MD5"] = (SSLCipherSuite*)&Cipher33;
-	result["TLS_KRB5_WITH_3DES_EDE_CBC_MD5"] = (SSLCipherSuite*)&Cipher34;
-	result["TLS_KRB5_WITH_RC4_128_MD5"] = (SSLCipherSuite*)&Cipher35;
-	result["TLS_KRB5_WITH_IDEA_CBC_MD5"] = (SSLCipherSuite*)&Cipher36;
-	result["TLS_KRB5_EXPORT_WITH_DES_CBC_40_SHA"] = (SSLCipherSuite*)&Cipher37;
-	result["TLS_KRB5_EXPORT_WITH_RC2_CBC_40_SHA"] = (SSLCipherSuite*)&Cipher38;
-	result["TLS_KRB5_EXPORT_WITH_RC4_40_SHA"] = (SSLCipherSuite*)&Cipher39;
-	result["TLS_KRB5_EXPORT_WITH_DES_CBC_40_MD5"] = (SSLCipherSuite*)&Cipher40;
-	result["TLS_KRB5_EXPORT_WITH_RC2_CBC_40_MD5"] = (SSLCipherSuite*)&Cipher41;
-	result["TLS_KRB5_EXPORT_WITH_RC4_40_MD5"] = (SSLCipherSuite*)&Cipher42;
-	result["TLS_PSK_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher43;
-	result["TLS_DHE_PSK_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher44;
-	result["TLS_RSA_PSK_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher45;
-	result["TLS_RSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher46;
-	result["TLS_DH_DSS_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher47;
-	result["TLS_DH_RSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher48;
-	result["TLS_DHE_DSS_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher49;
-	result["TLS_DHE_RSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher50;
-	result["TLS_DH_anon_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher51;
-	result["TLS_RSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher52;
-	result["TLS_DH_DSS_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher53;
-	result["TLS_DH_RSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher54;
-	result["TLS_DHE_DSS_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher55;
-	result["TLS_DHE_RSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher56;
-	result["TLS_DH_anon_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher57;
-	result["TLS_RSA_WITH_NULL_SHA256"] = (SSLCipherSuite*)&Cipher58;
-	result["TLS_RSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher59;
-	result["TLS_RSA_WITH_AES_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher60;
-	result["TLS_DH_DSS_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher61;
-	result["TLS_DH_RSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher62;
-	result["TLS_DHE_DSS_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher63;
-	result["TLS_RSA_WITH_CAMELLIA_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher64;
-	result["TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher65;
-	result["TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher66;
-	result["TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher67;
-	result["TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher68;
-	result["TLS_DH_anon_WITH_CAMELLIA_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher69;
-	result["TLS_DHE_RSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher70;
-	result["TLS_DH_DSS_WITH_AES_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher71;
-	result["TLS_DH_RSA_WITH_AES_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher72;
-	result["TLS_DHE_DSS_WITH_AES_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher73;
-	result["TLS_DHE_RSA_WITH_AES_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher74;
-	result["TLS_DH_anon_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher75;
-	result["TLS_DH_anon_WITH_AES_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher76;
-	result["TLS_RSA_WITH_CAMELLIA_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher77;
-	result["TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher78;
-	result["TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher79;
-	result["TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher80;
-	result["TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher81;
-	result["TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher82;
-	result["TLS_PSK_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher83;
-	result["TLS_PSK_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher84;
-	result["TLS_PSK_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher85;
-	result["TLS_PSK_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher86;
-	result["TLS_DHE_PSK_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher87;
-	result["TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher88;
-	result["TLS_DHE_PSK_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher89;
-	result["TLS_DHE_PSK_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher90;
-	result["TLS_RSA_PSK_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher91;
-	result["TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher92;
-	result["TLS_RSA_PSK_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher93;
-	result["TLS_RSA_PSK_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher94;
-	result["TLS_RSA_WITH_SEED_CBC_SHA"] = (SSLCipherSuite*)&Cipher95;
-	result["TLS_DH_DSS_WITH_SEED_CBC_SHA"] = (SSLCipherSuite*)&Cipher96;
-	result["TLS_DH_RSA_WITH_SEED_CBC_SHA"] = (SSLCipherSuite*)&Cipher97;
-	result["TLS_DHE_DSS_WITH_SEED_CBC_SHA"] = (SSLCipherSuite*)&Cipher98;
-	result["TLS_DHE_RSA_WITH_SEED_CBC_SHA"] = (SSLCipherSuite*)&Cipher99;
-	result["TLS_DH_anon_WITH_SEED_CBC_SHA"] = (SSLCipherSuite*)&Cipher100;
-	result["TLS_RSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher101;
-	result["TLS_RSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher102;
-	result["TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher103;
-	result["TLS_DHE_RSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher104;
-	result["TLS_DH_RSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher105;
-	result["TLS_DH_RSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher106;
-	result["TLS_DHE_DSS_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher107;
-	result["TLS_DHE_DSS_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher108;
-	result["TLS_DH_DSS_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher109;
-	result["TLS_DH_DSS_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher110;
-	result["TLS_DH_anon_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher111;
-	result["TLS_DH_anon_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher112;
-	result["TLS_PSK_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher113;
-	result["TLS_PSK_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher114;
-	result["TLS_DHE_PSK_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher115;
-	result["TLS_DHE_PSK_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher116;
-	result["TLS_RSA_PSK_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher117;
-	result["TLS_RSA_PSK_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher118;
-	result["TLS_PSK_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher119;
-	result["TLS_PSK_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher120;
-	result["TLS_PSK_WITH_NULL_SHA256"] = (SSLCipherSuite*)&Cipher121;
-	result["TLS_PSK_WITH_NULL_SHA384"] = (SSLCipherSuite*)&Cipher122;
-	result["TLS_DHE_PSK_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher123;
-	result["TLS_DHE_PSK_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher124;
-	result["TLS_DHE_PSK_WITH_NULL_SHA256"] = (SSLCipherSuite*)&Cipher125;
-	result["TLS_DHE_PSK_WITH_NULL_SHA384"] = (SSLCipherSuite*)&Cipher126;
-	result["TLS_RSA_PSK_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher127;
-	result["TLS_RSA_PSK_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher128;
-	result["TLS_RSA_PSK_WITH_NULL_SHA256"] = (SSLCipherSuite*)&Cipher129;
-	result["TLS_RSA_PSK_WITH_NULL_SHA384"] = (SSLCipherSuite*)&Cipher130;
-	result["TLS_RSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher131;
-	result["TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher132;
-	result["TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher133;
-	result["TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher134;
-	result["TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher135;
-	result["TLS_DH_anon_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher136;
-	result["TLS_RSA_WITH_CAMELLIA_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher137;
-	result["TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher138;
-	result["TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher139;
-	result["TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher140;
-	result["TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher141;
-	result["TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA256"] = (SSLCipherSuite*)&Cipher142;
-	result["TLS_ECDH_ECDSA_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher143;
-	result["TLS_ECDH_ECDSA_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher144;
-	result["TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher145;
-	result["TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher146;
-	result["TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher147;
-	result["TLS_ECDHE_ECDSA_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher148;
-	result["TLS_ECDHE_ECDSA_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher149;
-	result["TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher150;
-	result["TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher151;
-	result["TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher152;
-	result["TLS_ECDH_RSA_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher153;
-	result["TLS_ECDH_RSA_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher154;
-	result["TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher155;
-	result["TLS_ECDH_RSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher156;
-	result["TLS_ECDH_RSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher157;
-	result["TLS_ECDHE_RSA_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher158;
-	result["TLS_ECDHE_RSA_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher159;
-	result["TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher160;
-	result["TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher161;
-	result["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher162;
-	result["TLS_ECDH_anon_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher163;
-	result["TLS_ECDH_anon_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher164;
-	result["TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher165;
-	result["TLS_ECDH_anon_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher166;
-	result["TLS_ECDH_anon_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher167;
-	result["TLS_SRP_SHA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher168;
-	result["TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher169;
-	result["TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher170;
-	result["TLS_SRP_SHA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher171;
-	result["TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher172;
-	result["TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher173;
-	result["TLS_SRP_SHA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher174;
-	result["TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher175;
-	result["TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher176;
-	result["TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher177;
-	result["TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher178;
-	result["TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher179;
-	result["TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher180;
-	result["TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher181;
-	result["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher182;
-	result["TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher183;
-	result["TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher184;
-	result["TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher185;
-	result["TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher186;
-	result["TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher187;
-	result["TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher188;
-	result["TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher189;
-	result["TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher190;
-	result["TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher191;
-	result["TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher192;
-	result["TLS_ECDHE_PSK_WITH_RC4_128_SHA"] = (SSLCipherSuite*)&Cipher193;
-	result["TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA"] = (SSLCipherSuite*)&Cipher194;
-	result["TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA"] = (SSLCipherSuite*)&Cipher195;
-	result["TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA"] = (SSLCipherSuite*)&Cipher196;
-	result["TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher197;
-	result["TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher198;
-	result["TLS_ECDHE_PSK_WITH_NULL_SHA"] = (SSLCipherSuite*)&Cipher199;
-	result["TLS_ECDHE_PSK_WITH_NULL_SHA256"] = (SSLCipherSuite*)&Cipher200;
-	result["TLS_ECDHE_PSK_WITH_NULL_SHA384"] = (SSLCipherSuite*)&Cipher201;
-	result["TLS_RSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher202;
-	result["TLS_RSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher203;
-	result["TLS_DH_DSS_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher204;
-	result["TLS_DH_DSS_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher205;
-	result["TLS_DH_RSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher206;
-	result["TLS_DH_RSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher207;
-	result["TLS_DHE_DSS_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher208;
-	result["TLS_DHE_DSS_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher209;
-	result["TLS_DHE_RSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher210;
-	result["TLS_DHE_RSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher211;
-	result["TLS_DH_anon_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher212;
-	result["TLS_DH_anon_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher213;
-	result["TLS_ECDHE_ECDSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher214;
-	result["TLS_ECDHE_ECDSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher215;
-	result["TLS_ECDH_ECDSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher216;
-	result["TLS_ECDH_ECDSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher217;
-	result["TLS_ECDHE_RSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher218;
-	result["TLS_ECDHE_RSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher219;
-	result["TLS_ECDH_RSA_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher220;
-	result["TLS_ECDH_RSA_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher221;
-	result["TLS_RSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher222;
-	result["TLS_RSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher223;
-	result["TLS_DHE_RSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher224;
-	result["TLS_DHE_RSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher225;
-	result["TLS_DH_RSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher226;
-	result["TLS_DH_RSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher227;
-	result["TLS_DHE_DSS_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher228;
-	result["TLS_DHE_DSS_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher229;
-	result["TLS_DH_DSS_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher230;
-	result["TLS_DH_DSS_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher231;
-	result["TLS_DH_anon_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher232;
-	result["TLS_DH_anon_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher233;
-	result["TLS_ECDHE_ECDSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher234;
-	result["TLS_ECDHE_ECDSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher235;
-	result["TLS_ECDH_ECDSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher236;
-	result["TLS_ECDH_ECDSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher237;
-	result["TLS_ECDHE_RSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher238;
-	result["TLS_ECDHE_RSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher239;
-	result["TLS_ECDH_RSA_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher240;
-	result["TLS_ECDH_RSA_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher241;
-	result["TLS_PSK_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher242;
-	result["TLS_PSK_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher243;
-	result["TLS_DHE_PSK_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher244;
-	result["TLS_DHE_PSK_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher245;
-	result["TLS_RSA_PSK_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher246;
-	result["TLS_RSA_PSK_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher247;
-	result["TLS_PSK_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher248;
-	result["TLS_PSK_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher249;
-	result["TLS_DHE_PSK_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher250;
-	result["TLS_DHE_PSK_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher251;
-	result["TLS_RSA_PSK_WITH_ARIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher252;
-	result["TLS_RSA_PSK_WITH_ARIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher253;
-	result["TLS_ECDHE_PSK_WITH_ARIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher254;
-	result["TLS_ECDHE_PSK_WITH_ARIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher255;
-	result["TLS_ECDHE_ECDSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher256;
-	result["TLS_ECDHE_ECDSA_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher257;
-	result["TLS_ECDH_ECDSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher258;
-	result["TLS_ECDH_ECDSA_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher259;
-	result["TLS_ECDHE_RSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher260;
-	result["TLS_ECDHE_RSA_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher261;
-	result["TLS_ECDH_RSA_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher262;
-	result["TLS_ECDH_RSA_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher263;
-	result["TLS_RSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher264;
-	result["TLS_RSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher265;
-	result["TLS_DHE_RSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher266;
-	result["TLS_DHE_RSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher267;
-	result["TLS_DH_RSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher268;
-	result["TLS_DH_RSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher269;
-	result["TLS_DHE_DSS_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher270;
-	result["TLS_DHE_DSS_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher271;
-	result["TLS_DH_DSS_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher272;
-	result["TLS_DH_DSS_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher273;
-	result["TLS_DH_anon_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher274;
-	result["TLS_DH_anon_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher275;
-	result["TLS_ECDHE_ECDSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher276;
-	result["TLS_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher277;
-	result["TLS_ECDH_ECDSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher278;
-	result["TLS_ECDH_ECDSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher279;
-	result["TLS_ECDHE_RSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher280;
-	result["TLS_ECDHE_RSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher281;
-	result["TLS_ECDH_RSA_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher282;
-	result["TLS_ECDH_RSA_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher283;
-	result["TLS_PSK_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher284;
-	result["TLS_PSK_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher285;
-	result["TLS_DHE_PSK_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher286;
-	result["TLS_DHE_PSK_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher287;
-	result["TLS_RSA_PSK_WITH_CAMELLIA_128_GCM_SHA256"] = (SSLCipherSuite*)&Cipher288;
-	result["TLS_RSA_PSK_WITH_CAMELLIA_256_GCM_SHA384"] = (SSLCipherSuite*)&Cipher289;
-	result["TLS_PSK_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher290;
-	result["TLS_PSK_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher291;
-	result["TLS_DHE_PSK_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher292;
-	result["TLS_DHE_PSK_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher293;
-	result["TLS_RSA_PSK_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher294;
-	result["TLS_RSA_PSK_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher295;
-	result["TLS_ECDHE_PSK_WITH_CAMELLIA_128_CBC_SHA256"] = (SSLCipherSuite*)&Cipher296;
-	result["TLS_ECDHE_PSK_WITH_CAMELLIA_256_CBC_SHA384"] = (SSLCipherSuite*)&Cipher297;
-	result["TLS_RSA_WITH_AES_128_CCM"] = (SSLCipherSuite*)&Cipher298;
-	result["TLS_RSA_WITH_AES_256_CCM"] = (SSLCipherSuite*)&Cipher299;
-	result["TLS_DHE_RSA_WITH_AES_128_CCM"] = (SSLCipherSuite*)&Cipher300;
-	result["TLS_DHE_RSA_WITH_AES_256_CCM"] = (SSLCipherSuite*)&Cipher301;
-	result["TLS_RSA_WITH_AES_128_CCM_8"] = (SSLCipherSuite*)&Cipher302;
-	result["TLS_RSA_WITH_AES_256_CCM_8"] = (SSLCipherSuite*)&Cipher303;
-	result["TLS_DHE_RSA_WITH_AES_128_CCM_8"] = (SSLCipherSuite*)&Cipher304;
-	result["TLS_DHE_RSA_WITH_AES_256_CCM_8"] = (SSLCipherSuite*)&Cipher305;
-	result["TLS_PSK_WITH_AES_128_CCM"] = (SSLCipherSuite*)&Cipher306;
-	result["TLS_PSK_WITH_AES_256_CCM"] = (SSLCipherSuite*)&Cipher307;
-	result["TLS_DHE_PSK_WITH_AES_128_CCM"] = (SSLCipherSuite*)&Cipher308;
-	result["TLS_DHE_PSK_WITH_AES_256_CCM"] = (SSLCipherSuite*)&Cipher309;
-	result["TLS_PSK_WITH_AES_128_CCM_8"] = (SSLCipherSuite*)&Cipher310;
-	result["TLS_PSK_WITH_AES_256_CCM_8"] = (SSLCipherSuite*)&Cipher311;
-	result["TLS_PSK_DHE_WITH_AES_128_CCM_8"] = (SSLCipherSuite*)&Cipher312;
-	result["TLS_PSK_DHE_WITH_AES_256_CCM_8"] = (SSLCipherSuite*)&Cipher313;
-	result["TLS_ECDHE_ECDSA_WITH_AES_128_CCM"] = (SSLCipherSuite*)&Cipher314;
-	result["TLS_ECDHE_ECDSA_WITH_AES_256_CCM"] = (SSLCipherSuite*)&Cipher315;
-	result["TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8"] = (SSLCipherSuite*)&Cipher316;
-	result["TLS_ECDHE_ECDSA_WITH_AES_256_CCM_8"] = (SSLCipherSuite*)&Cipher317;
-	result["TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher318;
-	result["TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher319;
-	result["TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher320;
-	result["TLS_PSK_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher321;
-	result["TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher322;
-	result["TLS_DHE_PSK_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher323;
-	result["TLS_RSA_PSK_WITH_CHACHA20_POLY1305_SHA256"] = (SSLCipherSuite*)&Cipher324;
-
-	return result;
+	uint16_t greaseExtensions[] = {0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a, 0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa};
+	return std::set<uint16_t>(greaseExtensions, greaseExtensions + 16);
 }
 
 static const std::map<uint16_t, SSLCipherSuite*> CipherSuiteIdToObjectMap = createCipherSuiteIdToObjectMap();
 
-static const std::map<std::string, SSLCipherSuite*> CipherSuiteStringToObjectMap = createCipherSuiteStringToObjectMap();
+static const std::map<uint32_t, SSLCipherSuite*> CipherSuiteStringToObjectMap = createCipherSuiteStringToObjectMap();
+
+static const std::set<uint16_t> GreaseSet = createGreaseSet();
 
 SSLCipherSuite* SSLCipherSuite::getCipherSuiteByID(uint16_t id)
 {
 	std::map<uint16_t, SSLCipherSuite*>::const_iterator pos = CipherSuiteIdToObjectMap.find(id);
 	if (pos == CipherSuiteIdToObjectMap.end())
-	    return NULL;
+		return NULL;
 	else
-	    return pos->second;
+		return pos->second;
 }
 
 SSLCipherSuite* SSLCipherSuite::getCipherSuiteByName(std::string name)
 {
-	std::map<std::string, SSLCipherSuite*>::const_iterator pos = CipherSuiteStringToObjectMap.find(name);
+	uint32_t nameHash = hashString(name);
+	std::map<uint32_t, SSLCipherSuite*>::const_iterator pos = CipherSuiteStringToObjectMap.find(nameHash);
 	if (pos == CipherSuiteStringToObjectMap.end())
-	    return NULL;
+		return NULL;
 	else
-	    return pos->second;
+		return pos->second;
 }
 
 // --------------------
@@ -1042,7 +1075,7 @@ SSLExtension::SSLExtension(uint8_t* data)
 	m_RawData = data;
 }
 
-SSLExtensionType SSLExtension::getType()
+SSLExtensionType SSLExtension::getType() const
 {
 	uint16_t typeAsInt = getTypeAsInt();
 	if (typeAsInt <= 24 || typeAsInt == 35 || typeAsInt == 65281)
@@ -1051,24 +1084,29 @@ SSLExtensionType SSLExtension::getType()
 	return SSL_EXT_Unknown;
 }
 
-uint16_t SSLExtension::getTypeAsInt()
+uint16_t SSLExtension::getTypeAsInt() const
 {
-	return ntohs(getExtensionStruct()->extensionType);
+	return be16toh(getExtensionStruct()->extensionType);
 }
 
-uint16_t SSLExtension::getLength()
+uint16_t SSLExtension::getLength() const
 {
-	return ntohs(getExtensionStruct()->extensionDataLength);
+	return be16toh(getExtensionStruct()->extensionDataLength);
 }
 
-uint16_t SSLExtension::getTotalLength()
+uint16_t SSLExtension::getTotalLength() const
 {
 	return getLength() + 2*sizeof(uint16_t);
 }
 
-uint8_t* SSLExtension::getData()
+uint8_t* SSLExtension::getData() const
 {
-	return getExtensionStruct()->extensionData;
+	if (getLength() > 0)
+	{
+		return getExtensionStruct()->extensionData;
+	}
+
+	return NULL;
 }
 
 
@@ -1076,10 +1114,10 @@ uint8_t* SSLExtension::getData()
 // SSLServerNameIndicationExtension methods
 // ----------------------------------------
 
-std::string SSLServerNameIndicationExtension::getHostName()
+std::string SSLServerNameIndicationExtension::getHostName() const
 {
 	uint8_t* hostNameLengthPos = getData() + sizeof(uint16_t) + sizeof(uint8_t);
-	uint16_t hostNameLength = ntohs(*(uint16_t*)hostNameLengthPos);
+	uint16_t hostNameLength = be16toh(*(uint16_t*)hostNameLengthPos);
 
 	char* hostNameAsCharArr = new char[hostNameLength+1];
 	memset(hostNameAsCharArr, 0, hostNameLength+1);
@@ -1088,6 +1126,87 @@ std::string SSLServerNameIndicationExtension::getHostName()
 	std::string res = std::string(hostNameAsCharArr);
 	delete[] hostNameAsCharArr;
 	return res;
+}
+
+
+// -------------------------------------
+// SSLSupportedVersionsExtension methods
+// -------------------------------------
+
+std::vector<SSLVersion> SSLSupportedVersionsExtension::getSupportedVersions() const
+{
+	std::vector<SSLVersion> result;
+	uint16_t extensionLength = getLength();
+	if (extensionLength == 2) // server hello message
+	{
+		result.push_back(SSLVersion(be16toh(*(uint16_t*)getData())));
+	}
+	else // client-hello message
+	{
+		uint8_t listLength = *getData();
+		if (listLength != static_cast<uint8_t>(extensionLength - 1) || listLength % 2 != 0)
+			return result; // bad extension data
+
+		uint8_t* dataPtr = getData() + sizeof(uint8_t);
+		for (int i = 0; i < listLength / 2; i++)
+		{
+			result.push_back(SSLVersion(be16toh(*(uint16_t*)dataPtr)));
+			dataPtr += sizeof(uint16_t);
+		}
+	}
+
+	return result;
+}
+
+
+// -----------------------------------
+// TLSSupportedGroupsExtension methods
+// -----------------------------------
+
+std::vector<uint16_t> TLSSupportedGroupsExtension::getSupportedGroups() const
+{
+	std::vector<uint16_t> result;
+
+	uint16_t extensionLength = getLength();
+	if (extensionLength < sizeof(uint16_t))
+		return result; //bad extension data
+
+	uint16_t listLength = be16toh(*(uint16_t*)getData());
+	if (listLength != (extensionLength - sizeof(uint16_t)) || listLength % 2 != 0)
+		return result; // bad extension data
+
+	uint8_t* dataPtr = getData() + sizeof(uint16_t);
+	for (int i = 0; i < listLength / 2; i++)
+	{
+		result.push_back(be16toh(*(uint16_t*)dataPtr));
+		dataPtr += sizeof(uint16_t);
+	}
+
+	return result;
+}
+
+
+// ---------------------------------
+// TLSECPointFormatExtension methods
+// ---------------------------------
+
+std::vector<uint8_t> TLSECPointFormatExtension::getECPointFormatList() const
+{
+	std::vector<uint8_t> result;
+
+	uint16_t extensionLength = getLength();
+	uint8_t listLength = *getData();
+	if (listLength != static_cast<uint8_t>(extensionLength - 1))
+		return result; // bad extension data
+
+	uint8_t* dataPtr = getData() + sizeof(uint8_t);
+	for (int i = 0; i < listLength; i++)
+	{
+		result.push_back(*dataPtr);
+		dataPtr += sizeof(uint8_t);
+	}
+
+	return result;
 }
 
 
@@ -1102,7 +1221,7 @@ SSLHandshakeMessage::SSLHandshakeMessage(uint8_t* data, size_t dataLen, SSLHands
 	m_Container = container;
 }
 
-SSLHandshakeMessage* SSLHandshakeMessage::createHandhakeMessage(uint8_t* data, size_t dataLen, SSLHandshakeLayer* container)
+SSLHandshakeMessage* SSLHandshakeMessage::createHandshakeMessage(uint8_t* data, size_t dataLen, SSLHandshakeLayer* container)
 {
 	if (dataLen < sizeof(ssl_tls_handshake_layer))
 		return NULL;
@@ -1137,30 +1256,30 @@ SSLHandshakeMessage* SSLHandshakeMessage::createHandhakeMessage(uint8_t* data, s
 	}
 }
 
-SSLHandshakeType SSLHandshakeMessage::getHandshakeType()
+SSLHandshakeType SSLHandshakeMessage::getHandshakeType() const
 {
 	ssl_tls_handshake_layer* handshakeLayer = (ssl_tls_handshake_layer*)m_Data;
 	return (SSLHandshakeType)handshakeLayer->handshakeType;
 }
 
-size_t SSLHandshakeMessage::getMessageLength()
+size_t SSLHandshakeMessage::getMessageLength() const
 {
 	ssl_tls_handshake_layer* handshakeLayer = (ssl_tls_handshake_layer*)m_Data;
 	//TODO: add handshakeLayer->length1 to the calculation
-	size_t len = sizeof(ssl_tls_handshake_layer) + ntohs(handshakeLayer->length2);
+	size_t len = sizeof(ssl_tls_handshake_layer) + be16toh(handshakeLayer->length2);
 	if (len > m_DataLen)
 		return m_DataLen;
 
 	return len;
 }
 
-bool SSLHandshakeMessage::isMessageComplete()
+bool SSLHandshakeMessage::isMessageComplete() const
 {
 	if (m_DataLen < sizeof(ssl_tls_handshake_layer))
 		return false;
 
 	ssl_tls_handshake_layer* handshakeLayer = (ssl_tls_handshake_layer*)m_Data;
-	size_t len = sizeof(ssl_tls_handshake_layer) + ntohs(handshakeLayer->length2);
+	size_t len = sizeof(ssl_tls_handshake_layer) + be16toh(handshakeLayer->length2);
 	return len <= m_DataLen;
 }
 
@@ -1177,36 +1296,60 @@ SSLClientHelloMessage::SSLClientHelloMessage(uint8_t* data, size_t dataLen, SSLH
 		return;
 
 	uint8_t* extensionLengthPos = m_Data + extensionLengthOffset;
-	uint16_t extensionLength = getExtensionsLenth();
+	uint16_t extensionLength = getExtensionsLength();
 	uint8_t* extensionPos = extensionLengthPos + sizeof(uint16_t);
 	uint8_t* curPos = extensionPos;
 	size_t messageLen = getMessageLength();
-	while ((curPos - extensionPos) < (int)extensionLength && (curPos - m_Data) < (int)messageLen)
+	size_t minSSLExtensionLen = 2*sizeof(uint16_t);
+	while ((curPos - extensionPos) < (int)extensionLength
+		&& (curPos - m_Data) < (int)messageLen
+		&& (int)messageLen - (curPos - m_Data) >= (int)minSSLExtensionLen)
 	{
 		SSLExtension* newExt = NULL;
-		uint16_t sslExtType = ntohs(*(uint16_t*)curPos);
-		if (sslExtType == SSL_EXT_SERVER_NAME)
+		uint16_t sslExtType = be16toh(*(uint16_t*)curPos);
+		switch (sslExtType)
 		{
+		case SSL_EXT_SERVER_NAME:
 			newExt = new SSLServerNameIndicationExtension(curPos);
-		}
-		else
-		{
+			break;
+		case SSL_EXT_SUPPORTED_VERSIONS:
+			newExt = new SSLSupportedVersionsExtension(curPos);
+			break;
+		case SSL_EXT_SUPPORTED_GROUPS:
+			newExt = new TLSSupportedGroupsExtension(curPos);
+			break;
+		case SSL_EXT_EC_POINT_FORMATS:
+			newExt = new TLSECPointFormatExtension(curPos);
+			break;
+		default:
 			newExt = new SSLExtension(curPos);
 		}
+
+		// Total length can be zero only if getLength() == 0xfffc which is way too large
+		// and means that this extension (and packet) are malformed
+		if (newExt->getTotalLength() == 0)
+		{
+			delete newExt;
+			break;
+		}
+
 
 		m_ExtensionList.pushBack(newExt);
 		curPos += newExt->getTotalLength();
 	}
 }
 
-SSLVersion SSLClientHelloMessage::getHandshakeVersion()
+SSLVersion SSLClientHelloMessage::getHandshakeVersion() const
 {
-	uint16_t handshakeVersion = ntohs(getClientHelloHeader()->handshakeVersion);
-	return (SSLVersion)handshakeVersion;
+	uint16_t handshakeVersion = be16toh(getClientHelloHeader()->handshakeVersion);
+	return SSLVersion(handshakeVersion);
 }
 
-uint8_t SSLClientHelloMessage::getSessionIDLength()
+uint8_t SSLClientHelloMessage::getSessionIDLength() const
 {
+	if (m_DataLen <= sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t))
+		return 0;
+
 	uint8_t val = *(m_Data + sizeof(ssl_tls_client_server_hello));
 	if ((size_t)val > m_DataLen - sizeof(ssl_tls_client_server_hello) - 1)
 		return (uint8_t)(m_DataLen - sizeof(ssl_tls_client_server_hello) - 1);
@@ -1214,7 +1357,7 @@ uint8_t SSLClientHelloMessage::getSessionIDLength()
 	return val;
 }
 
-uint8_t* SSLClientHelloMessage::getSessionID()
+uint8_t* SSLClientHelloMessage::getSessionID() const
 {
 	if (getSessionIDLength() > 0)
 		return (m_Data + sizeof(ssl_tls_client_server_hello) + 1);
@@ -1222,30 +1365,44 @@ uint8_t* SSLClientHelloMessage::getSessionID()
 		return NULL;
 }
 
-int SSLClientHelloMessage::getCipherSuiteCount()
+int SSLClientHelloMessage::getCipherSuiteCount() const
 {
 	size_t cipherSuiteOffset = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength();
 	if (cipherSuiteOffset + sizeof(uint16_t) > m_DataLen)
 		return 0;
 
 	uint16_t cipherSuiteLen = *(uint16_t*)(m_Data + cipherSuiteOffset);
-	return ntohs(cipherSuiteLen) / 2;
+	return be16toh(cipherSuiteLen) / 2;
 }
 
-SSLCipherSuite* SSLClientHelloMessage::getCipherSuite(int index)
+SSLCipherSuite* SSLClientHelloMessage::getCipherSuite(int index) const
+{
+	bool isValid;
+	uint16_t id = getCipherSuiteID(index, isValid);
+	return (isValid ? SSLCipherSuite::getCipherSuiteByID(id) : NULL);
+}
+
+uint16_t SSLClientHelloMessage::getCipherSuiteID(int index, bool& isValid) const
 {
 	if (index < 0 || index >= getCipherSuiteCount())
-		return NULL;
+	{
+		isValid = false;
+		return 0;
+	}
 
 	size_t cipherSuiteStartOffset = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength() + sizeof(uint16_t);
 	if (cipherSuiteStartOffset + sizeof(uint16_t) > m_DataLen)
-		return NULL;
+	{
+		isValid = false;
+		return 0;
+	}
 
+	isValid = true;
 	uint16_t* cipherSuiteStartPos = (uint16_t*)(m_Data + cipherSuiteStartOffset);
-	return SSLCipherSuite::getCipherSuiteByID(ntohs(*(cipherSuiteStartPos+index)));
+	return be16toh(*(cipherSuiteStartPos+index));
 }
 
-uint8_t SSLClientHelloMessage::getCompressionMethodsValue()
+uint8_t SSLClientHelloMessage::getCompressionMethodsValue() const
 {
 	size_t offset = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength() + sizeof(uint16_t) + sizeof(uint16_t)*getCipherSuiteCount() + sizeof(uint8_t);
 	if (offset + sizeof(uint8_t) > m_DataLen)
@@ -1255,32 +1412,32 @@ uint8_t SSLClientHelloMessage::getCompressionMethodsValue()
 	return *pos;
 }
 
-int SSLClientHelloMessage::getExtensionCount()
+int SSLClientHelloMessage::getExtensionCount() const
 {
 	return m_ExtensionList.size();
 }
 
-uint16_t SSLClientHelloMessage::getExtensionsLenth()
+uint16_t SSLClientHelloMessage::getExtensionsLength() const
 {
 	size_t extensionLengthOffset = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength() + sizeof(uint16_t) + sizeof(uint16_t)*getCipherSuiteCount() + 2*sizeof(uint8_t);
 	if (extensionLengthOffset + sizeof(uint16_t) > m_DataLen)
 		return 0;
 
 	uint8_t* extensionLengthPos = m_Data + extensionLengthOffset;
-	return ntohs(*(uint16_t*)extensionLengthPos);
+	return be16toh(*(uint16_t*)extensionLengthPos);
 }
 
-SSLExtension* SSLClientHelloMessage::getExtension(int index)
+SSLExtension* SSLClientHelloMessage::getExtension(int index) const
 {
-	return m_ExtensionList.at(index);
+	return const_cast<SSLExtension*>(m_ExtensionList.at(index));
 }
 
-SSLExtension* SSLClientHelloMessage::getExtensionOfType(uint16_t type)
+SSLExtension* SSLClientHelloMessage::getExtensionOfType(uint16_t type) const
 {
 	size_t vecSize = m_ExtensionList.size();
 	for (size_t i = 0; i < vecSize; i++)
 	{
-		SSLExtension* curElem = m_ExtensionList.at(i);
+		SSLExtension* curElem = const_cast<SSLExtension*>(m_ExtensionList.at(i));
 		if (curElem->getTypeAsInt() == type)
 			return curElem;
 	}
@@ -1288,12 +1445,12 @@ SSLExtension* SSLClientHelloMessage::getExtensionOfType(uint16_t type)
 	return NULL;
 }
 
-SSLExtension* SSLClientHelloMessage::getExtensionOfType(SSLExtensionType type)
+SSLExtension* SSLClientHelloMessage::getExtensionOfType(SSLExtensionType type) const
 {
 	size_t vecSize = m_ExtensionList.size();
 	for (size_t i = 0; i < vecSize; i++)
 	{
-		SSLExtension* curElem = m_ExtensionList.at(i);
+		SSLExtension* curElem = const_cast<SSLExtension*>(m_ExtensionList.at(i));
 		if (curElem->getType() == type)
 			return curElem;
 	}
@@ -1301,9 +1458,119 @@ SSLExtension* SSLClientHelloMessage::getExtensionOfType(SSLExtensionType type)
 	return NULL;
 }
 
-std::string SSLClientHelloMessage::toString()
+SSLClientHelloMessage::ClientHelloTLSFingerprint SSLClientHelloMessage::generateTLSFingerprint() const
+{
+	SSLClientHelloMessage::ClientHelloTLSFingerprint result;
+
+	// extract version
+	result.tlsVersion = getHandshakeVersion().asUInt();
+
+	// extract cipher suites
+	int cipherSuiteCount = getCipherSuiteCount();
+	for (int i = 0; i < cipherSuiteCount; i++)
+	{
+		bool isValid = false;
+		uint16_t cipherSuiteID = getCipherSuiteID(i, isValid);
+		if (isValid && GreaseSet.find(cipherSuiteID) == GreaseSet.end())
+			result.cipherSuites.push_back(cipherSuiteID);
+	}
+
+	// extract extensions
+	int extensionCount = getExtensionCount();
+	for (int i = 0; i < extensionCount; i++)
+	{
+		uint16_t extensionType = getExtension(i)->getTypeAsInt();
+		if (GreaseSet.find(extensionType) != GreaseSet.end())
+			continue;
+
+		result.extensions.push_back(extensionType);
+	}
+
+	// extract supported groups
+	TLSSupportedGroupsExtension* supportedGroupsExt = getExtensionOfType<TLSSupportedGroupsExtension>();
+	if (supportedGroupsExt != NULL)
+	{
+		std::vector<uint16_t> supportedGroups = supportedGroupsExt->getSupportedGroups();
+		for (std::vector<uint16_t>::const_iterator iter = supportedGroups.begin(); iter != supportedGroups.end(); iter++)
+			if (GreaseSet.find(*iter) == GreaseSet.end())
+				result.supportedGroups.push_back(*iter);
+	}
+
+	// extract EC point formats
+	TLSECPointFormatExtension* ecPointFormatExt = getExtensionOfType<TLSECPointFormatExtension>();
+	if (ecPointFormatExt != NULL)
+	{
+		result.ecPointFormats = ecPointFormatExt->getECPointFormatList();
+	}
+
+	return result;
+}
+
+std::string SSLClientHelloMessage::toString() const
 {
 	return "Client Hello message";
+}
+
+
+// ------------------------------------------------
+// SSLClientHelloMessage::ClientHelloTLSFingerprint
+// ------------------------------------------------
+
+std::string SSLClientHelloMessage::ClientHelloTLSFingerprint::toString()
+{
+	std::stringstream tlsFingerprint;
+
+	// add version
+	tlsFingerprint << tlsVersion << ",";
+
+	// add cipher suites
+	bool firstCipher = true;
+	for (std::vector<uint16_t>::const_iterator iter = cipherSuites.begin(); iter != cipherSuites.end(); iter++)
+	{
+		tlsFingerprint << (firstCipher ? "" : "-") << *iter;
+		firstCipher = false;
+	}
+	tlsFingerprint << ",";
+
+	// add extensions
+	bool firstExtension = true;
+	for (std::vector<uint16_t>::const_iterator iter = extensions.begin(); iter != extensions.end(); iter++)
+	{
+		tlsFingerprint << (firstExtension ? "" : "-") << *iter;
+		firstExtension = false;
+	}
+	tlsFingerprint << ",";
+
+	// add supported groups
+	bool firstGroup = true;
+	for (std::vector<uint16_t>::const_iterator iter = supportedGroups.begin(); iter != supportedGroups.end(); iter++)
+	{
+		tlsFingerprint << (firstGroup ? "" : "-") << (*iter);
+		firstGroup = false;
+	}
+	tlsFingerprint << ",";
+
+	// add EC point formats
+	bool firstPointFormat = true;
+	for (std::vector<uint8_t>::iterator iter = ecPointFormats.begin(); iter != ecPointFormats.end(); iter++)
+	{
+		tlsFingerprint << (firstPointFormat ? "" : "-") << (int)(*iter);
+		firstPointFormat = false;
+	}
+
+	return tlsFingerprint.str();
+}
+
+std::string SSLClientHelloMessage::ClientHelloTLSFingerprint::toMD5()
+{
+	return toStringAndMD5().second;
+}
+
+std::pair<std::string, std::string> SSLClientHelloMessage::ClientHelloTLSFingerprint::toStringAndMD5()
+{
+	std::string str = toString();
+	MD5 md5;
+	return std::pair<std::string, std::string>(str, md5(str));
 }
 
 
@@ -1319,21 +1586,39 @@ SSLServerHelloMessage::SSLServerHelloMessage(uint8_t* data, size_t dataLen, SSLH
 		return;
 
 	uint8_t* extensionLengthPos = m_Data + extensionLengthOffset;
-	uint16_t extensionLength = getExtensionsLenth();
+	uint16_t extensionLength = getExtensionsLength();
 	uint8_t* extensionPos = extensionLengthPos + sizeof(uint16_t);
 	uint8_t* curPos = extensionPos;
 	size_t messageLen = getMessageLength();
-	while ((curPos - extensionPos) < (int)extensionLength && (curPos - m_Data) < (int)messageLen)
+	size_t minSSLExtensionLen = 2*sizeof(uint16_t) + sizeof(uint8_t);
+	while ((curPos - extensionPos) < (int)extensionLength
+		&& (curPos - m_Data) < (int)messageLen
+		&& (int)messageLen - (curPos - m_Data) >= (int)minSSLExtensionLen)
 	{
 		SSLExtension* newExt = NULL;
-		uint16_t sslExtType = ntohs(*(uint16_t*)curPos);
-		if (sslExtType == SSL_EXT_SERVER_NAME)
+		uint16_t sslExtType = be16toh(*(uint16_t*)curPos);
+		switch (sslExtType)
 		{
+		case SSL_EXT_SERVER_NAME:
 			newExt = new SSLServerNameIndicationExtension(curPos);
-		}
-		else
-		{
+			break;
+		case SSL_EXT_SUPPORTED_VERSIONS:
+			newExt = new SSLSupportedVersionsExtension(curPos);
+			break;
+		case SSL_EXT_SUPPORTED_GROUPS:
+			newExt = new TLSSupportedGroupsExtension(curPos);
+			break;
+		case SSL_EXT_EC_POINT_FORMATS:
+			newExt = new TLSECPointFormatExtension(curPos);
+			break;
+		default:
 			newExt = new SSLExtension(curPos);
+		}
+
+		if (newExt->getTotalLength() == 0)
+		{
+			delete newExt;
+			break;
 		}
 
 		m_ExtensionList.pushBack(newExt);
@@ -1341,14 +1626,25 @@ SSLServerHelloMessage::SSLServerHelloMessage(uint8_t* data, size_t dataLen, SSLH
 	}
 }
 
-SSLVersion SSLServerHelloMessage::getHandshakeVersion()
+SSLVersion SSLServerHelloMessage::getHandshakeVersion() const
 {
-	uint16_t handshakeVersion = ntohs(getServerHelloHeader()->handshakeVersion);
-	return (SSLVersion)handshakeVersion;
+	SSLSupportedVersionsExtension* supportedVersionsExt = getExtensionOfType<SSLSupportedVersionsExtension>();
+	if (supportedVersionsExt != NULL)
+	{
+		std::vector<SSLVersion> supportedVersions = supportedVersionsExt->getSupportedVersions();
+		if (supportedVersions.size() == 1)
+			return supportedVersions[0];
+	}
+
+	uint16_t handshakeVersion = be16toh(getServerHelloHeader()->handshakeVersion);
+	return SSLVersion(handshakeVersion);
 
 }
-uint8_t SSLServerHelloMessage::getSessionIDLength()
+uint8_t SSLServerHelloMessage::getSessionIDLength() const
 {
+	if (m_DataLen <= sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t))
+		return 0;
+
 	uint8_t val = *(m_Data + sizeof(ssl_tls_client_server_hello));
 	if ((size_t)val > m_DataLen - sizeof(ssl_tls_client_server_hello) - 1)
 		return (uint8_t)(m_DataLen - sizeof(ssl_tls_client_server_hello) - 1);
@@ -1356,7 +1652,7 @@ uint8_t SSLServerHelloMessage::getSessionIDLength()
 	return val;
 }
 
-uint8_t* SSLServerHelloMessage::getSessionID()
+uint8_t* SSLServerHelloMessage::getSessionID() const
 {
 	if (getSessionIDLength() > 0)
 		return (m_Data + sizeof(ssl_tls_client_server_hello) + 1);
@@ -1364,17 +1660,28 @@ uint8_t* SSLServerHelloMessage::getSessionID()
 		return NULL;
 }
 
-SSLCipherSuite* SSLServerHelloMessage::getCipherSuite()
+SSLCipherSuite* SSLServerHelloMessage::getCipherSuite() const
+{
+	bool isValid;
+	uint16_t id = getCipherSuiteID(isValid);
+	return (isValid ? SSLCipherSuite::getCipherSuiteByID(id) : NULL);
+}
+
+uint16_t SSLServerHelloMessage::getCipherSuiteID(bool& isValid) const
 {
 	size_t cipherSuiteStartOffset = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength();
 	if (cipherSuiteStartOffset + sizeof(uint16_t) > m_DataLen)
-		return NULL;
+	{
+		isValid = false;
+		return 0;
+	}
 
+	isValid = true;
 	uint16_t* cipherSuiteStartPos = (uint16_t*)(m_Data + cipherSuiteStartOffset);
-	return SSLCipherSuite::getCipherSuiteByID(ntohs(*(cipherSuiteStartPos)));
+	return be16toh(*(cipherSuiteStartPos));
 }
 
-uint8_t SSLServerHelloMessage::getCompressionMethodsValue()
+uint8_t SSLServerHelloMessage::getCompressionMethodsValue() const
 {
 	size_t offset = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength() + sizeof(uint16_t);
 	if (offset + sizeof(uint8_t) > m_DataLen)
@@ -1384,35 +1691,35 @@ uint8_t SSLServerHelloMessage::getCompressionMethodsValue()
 	return *pos;
 }
 
-int SSLServerHelloMessage::getExtensionCount()
+int SSLServerHelloMessage::getExtensionCount() const
 {
 	return m_ExtensionList.size();
 }
 
-uint16_t SSLServerHelloMessage::getExtensionsLenth()
+uint16_t SSLServerHelloMessage::getExtensionsLength() const
 {
 	size_t extensionLengthOffset  = sizeof(ssl_tls_client_server_hello) + sizeof(uint8_t) + getSessionIDLength() + sizeof(uint16_t) + sizeof(uint8_t);
 	if (extensionLengthOffset + sizeof(uint16_t) > m_DataLen)
 		return 0;
 
 	uint16_t* extensionLengthPos = (uint16_t*)(m_Data + extensionLengthOffset);
-	return ntohs(*extensionLengthPos);
+	return be16toh(*extensionLengthPos);
 }
 
-SSLExtension* SSLServerHelloMessage::getExtension(int index)
+SSLExtension* SSLServerHelloMessage::getExtension(int index) const
 {
 	if (index < 0 || index >= (int)m_ExtensionList.size())
 		return NULL;
 
-	return m_ExtensionList.at(index);
+	return const_cast<SSLExtension*>(m_ExtensionList.at(index));
 }
 
-SSLExtension* SSLServerHelloMessage::getExtensionOfType(uint16_t type)
+SSLExtension* SSLServerHelloMessage::getExtensionOfType(uint16_t type) const
 {
 	size_t vecSize = m_ExtensionList.size();
 	for (size_t i = 0; i < vecSize; i++)
 	{
-		SSLExtension* curElem = m_ExtensionList.at(i);
+		SSLExtension* curElem = const_cast<SSLExtension*>(m_ExtensionList.at(i));
 		if (curElem->getType() == type)
 			return curElem;
 	}
@@ -1420,12 +1727,12 @@ SSLExtension* SSLServerHelloMessage::getExtensionOfType(uint16_t type)
 	return NULL;
 }
 
-SSLExtension* SSLServerHelloMessage::getExtensionOfType(SSLExtensionType type)
+SSLExtension* SSLServerHelloMessage::getExtensionOfType(SSLExtensionType type) const
 {
 	size_t vecSize = m_ExtensionList.size();
 	for (size_t i = 0; i < vecSize; i++)
 	{
-		SSLExtension* curElem = m_ExtensionList.at(i);
+		SSLExtension* curElem = const_cast<SSLExtension*>(m_ExtensionList.at(i));
 		if (curElem->getType() == type)
 			return curElem;
 	}
@@ -1433,9 +1740,67 @@ SSLExtension* SSLServerHelloMessage::getExtensionOfType(SSLExtensionType type)
 	return NULL;
 }
 
-std::string SSLServerHelloMessage::toString()
+SSLServerHelloMessage::ServerHelloTLSFingerprint SSLServerHelloMessage::generateTLSFingerprint() const
+{
+	SSLServerHelloMessage::ServerHelloTLSFingerprint result;
+
+	// extract version
+	result.tlsVersion = getHandshakeVersion().asUInt();
+
+	// extract cipher suite
+	bool isValid;
+	uint16_t cipherSuite = getCipherSuiteID(isValid);
+	result.cipherSuite = (isValid ? cipherSuite : 0);
+
+	// extract extensions
+	int extensionCount = getExtensionCount();
+	for (int i = 0; i < extensionCount; i++)
+	{
+		uint16_t extensionType = getExtension(i)->getTypeAsInt();
+		result.extensions.push_back(extensionType);
+	}
+
+	return result;
+}
+
+std::string SSLServerHelloMessage::toString() const
 {
 	return "Server Hello message";
+}
+
+
+// ------------------------------------------------
+// SSLServerHelloMessage::ServerHelloTLSFingerprint
+// ------------------------------------------------
+
+std::string SSLServerHelloMessage::ServerHelloTLSFingerprint::toString()
+{
+	std::stringstream tlsFingerprint;
+
+	// add version and cipher suite
+	tlsFingerprint << tlsVersion << "," << cipherSuite << ",";
+
+	// add extensions
+	bool firstExtension = true;
+	for (std::vector<uint16_t>::const_iterator iter = extensions.begin(); iter != extensions.end(); iter++)
+	{
+		tlsFingerprint << (firstExtension ? "" : "-") << *iter;
+		firstExtension = false;
+	}
+
+	return tlsFingerprint.str();
+}
+
+std::string SSLServerHelloMessage::ServerHelloTLSFingerprint::toMD5()
+{
+	return toStringAndMD5().second;
+}
+
+std::pair<std::string, std::string> SSLServerHelloMessage::ServerHelloTLSFingerprint::toStringAndMD5()
+{
+	std::string str = toString();
+	MD5 md5;
+	return std::pair<std::string, std::string>(str, md5(str));
 }
 
 
@@ -1454,7 +1819,7 @@ SSLCertificateMessage::SSLCertificateMessage(uint8_t* data, size_t dataLen, SSLH
 	// read certificates length
 	// TODO: certificates length is 3B. Currently assuming the MSB is 0 and reading only 2 LSBs
 	uint8_t* curPos = data + sizeof(ssl_tls_handshake_layer) + sizeof(uint8_t);
-	uint16_t certificatesLength = ntohs(*(uint16_t*)(curPos));
+	uint16_t certificatesLength = be16toh(*(uint16_t*)(curPos));
 	if (certificatesLength == 0)
 		return;
 
@@ -1470,7 +1835,7 @@ SSLCertificateMessage::SSLCertificateMessage(uint8_t* data, size_t dataLen, SSLH
 
 		// read certificate length
 		curPos += sizeof(uint8_t);
-		uint16_t certificateLength = ntohs(*(uint16_t*)(curPos));
+		uint16_t certificateLength = be16toh(*(uint16_t*)(curPos));
 
 		// advance to start position of certificate
 		curPos += sizeof(uint16_t);
@@ -1484,7 +1849,7 @@ SSLCertificateMessage::SSLCertificateMessage(uint8_t* data, size_t dataLen, SSLH
 			certificateFull = false;
 		}
 
-		LOG_DEBUG("Parsing certificate: pos=%d; len=%d\n", (int)(curPos-data), (int)certificateLength);
+		PCPP_LOG_DEBUG("Parsing certificate: pos=" << (int)(curPos-data) << "; len=" << certificateLength);
 		SSLx509Certificate* newCert = new SSLx509Certificate(curPos, certificateLength, certificateFull);
 		m_CertificateList.pushBack(newCert);
 
@@ -1492,25 +1857,25 @@ SSLCertificateMessage::SSLCertificateMessage(uint8_t* data, size_t dataLen, SSLH
 	}
 }
 
-std::string SSLCertificateMessage::toString()
+std::string SSLCertificateMessage::toString() const
 {
 	return "Certificate message";
 }
 
-int SSLCertificateMessage::getNumOfCertificates()
+int SSLCertificateMessage::getNumOfCertificates() const
 {
 	return m_CertificateList.size();
 }
 
-SSLx509Certificate* SSLCertificateMessage::getCertificate(int index)
+SSLx509Certificate* SSLCertificateMessage::getCertificate(int index) const
 {
 	if (index < 0 || index > (int)m_CertificateList.size())
 	{
-		LOG_DEBUG("certificate index out of range: asked for index %d, total size is %d", index, (int)m_CertificateList.size());
+		PCPP_LOG_DEBUG("certificate index out of range: asked for index " << index << ", total size is " << m_CertificateList.size());
 		return NULL;
 	}
 
-	return m_CertificateList.at(index);
+	return const_cast<SSLx509Certificate*>(m_CertificateList.at(index));
 }
 
 
@@ -1519,7 +1884,7 @@ SSLx509Certificate* SSLCertificateMessage::getCertificate(int index)
 // SSLHelloRequestMessage methods
 // ------------------------------
 
-std::string SSLHelloRequestMessage::toString()
+std::string SSLHelloRequestMessage::toString() const
 {
 	return "Hello Request message";
 }
@@ -1529,7 +1894,7 @@ std::string SSLHelloRequestMessage::toString()
 // SSLServerHelloDoneMessage methods
 // ---------------------------------
 
-std::string SSLServerHelloDoneMessage::toString()
+std::string SSLServerHelloDoneMessage::toString() const
 {
 	return "Server Hello Done message";
 }
@@ -1538,7 +1903,7 @@ std::string SSLServerHelloDoneMessage::toString()
 // SSLServerKeyExchangeMessage methods
 // -----------------------------------
 
-uint8_t* SSLServerKeyExchangeMessage::getServerKeyExchangeParams()
+uint8_t* SSLServerKeyExchangeMessage::getServerKeyExchangeParams() const
 {
 	if (getMessageLength() > sizeof(ssl_tls_handshake_layer))
 		return (m_Data + sizeof(ssl_tls_handshake_layer));
@@ -1546,7 +1911,7 @@ uint8_t* SSLServerKeyExchangeMessage::getServerKeyExchangeParams()
 	return NULL;
 }
 
-size_t SSLServerKeyExchangeMessage::getServerKeyExchangeParamsLength()
+size_t SSLServerKeyExchangeMessage::getServerKeyExchangeParamsLength() const
 {
 	size_t msgLength = getMessageLength();
 	if (msgLength <= sizeof(ssl_tls_handshake_layer))
@@ -1555,7 +1920,7 @@ size_t SSLServerKeyExchangeMessage::getServerKeyExchangeParamsLength()
 	return msgLength - sizeof(ssl_tls_handshake_layer);
 }
 
-std::string SSLServerKeyExchangeMessage::toString()
+std::string SSLServerKeyExchangeMessage::toString() const
 {
 	return "Server Key Exchange message";
 }
@@ -1564,7 +1929,7 @@ std::string SSLServerKeyExchangeMessage::toString()
 // SSLClientKeyExchangeMessage methods
 // -----------------------------------
 
-uint8_t* SSLClientKeyExchangeMessage::getClientKeyExchangeParams()
+uint8_t* SSLClientKeyExchangeMessage::getClientKeyExchangeParams() const
 {
 	if (getMessageLength() > sizeof(ssl_tls_handshake_layer))
 		return (m_Data + sizeof(ssl_tls_handshake_layer));
@@ -1572,7 +1937,7 @@ uint8_t* SSLClientKeyExchangeMessage::getClientKeyExchangeParams()
 	return NULL;
 }
 
-size_t SSLClientKeyExchangeMessage::getClientKeyExchangeParamsLength()
+size_t SSLClientKeyExchangeMessage::getClientKeyExchangeParamsLength() const
 {
 	size_t msgLength = getMessageLength();
 	if (msgLength <= sizeof(ssl_tls_handshake_layer))
@@ -1581,7 +1946,7 @@ size_t SSLClientKeyExchangeMessage::getClientKeyExchangeParamsLength()
 	return msgLength - sizeof(ssl_tls_handshake_layer);
 }
 
-std::string SSLClientKeyExchangeMessage::toString()
+std::string SSLClientKeyExchangeMessage::toString() const
 {
 	return "Client Key Exchange message";
 }
@@ -1594,16 +1959,18 @@ std::string SSLClientKeyExchangeMessage::toString()
 SSLCertificateRequestMessage::SSLCertificateRequestMessage(uint8_t* data, size_t dataLen, SSLHandshakeLayer* container)
 		: SSLHandshakeMessage(data, dataLen, container)
 {
-	if (dataLen < sizeof(ssl_tls_handshake_layer) +
-			sizeof(uint8_t)) // certificate types count (1B)
+	size_t minMessageSize = sizeof(ssl_tls_handshake_layer) + sizeof(uint8_t); // certificate types count (1B)
+	if (dataLen < minMessageSize)
 		return;
 
 	size_t messageLen = getMessageLength();
+	if (messageLen < minMessageSize)
+		return;
 
 	uint8_t certificateTypesCount = *(uint8_t*)(data + sizeof(ssl_tls_handshake_layer));
 
-	if (certificateTypesCount > messageLen)
-		certificateTypesCount = messageLen;
+	if (certificateTypesCount > messageLen - minMessageSize)
+		certificateTypesCount = messageLen - minMessageSize;
 
 	uint8_t* pos = data + sizeof(ssl_tls_handshake_layer) + sizeof(uint8_t);
 	for (uint8_t i = 0; i < certificateTypesCount; i++)
@@ -1615,9 +1982,8 @@ SSLCertificateRequestMessage::SSLCertificateRequestMessage(uint8_t* data, size_t
 				certType > 64)
 			m_ClientCertificateTypes.push_back(SSL_CCT_UNKNOWN);
 		else
-			m_ClientCertificateTypes.push_back((SSLClientCertificateType)certType);
+			m_ClientCertificateTypes.push_back(static_cast<SSLClientCertificateType>(certType));
 	}
-
 }
 
 std::vector<SSLClientCertificateType>& SSLCertificateRequestMessage::getCertificateTypes()
@@ -1625,7 +1991,7 @@ std::vector<SSLClientCertificateType>& SSLCertificateRequestMessage::getCertific
 	return m_ClientCertificateTypes;
 }
 
-uint8_t* SSLCertificateRequestMessage::getCertificateAuthorityData()
+uint8_t* SSLCertificateRequestMessage::getCertificateAuthorityData() const
 {
 	size_t messageLen = getMessageLength();
 	size_t offset = sizeof(ssl_tls_handshake_layer) + sizeof(uint8_t) + m_ClientCertificateTypes.size() + sizeof(uint16_t);
@@ -1635,14 +2001,14 @@ uint8_t* SSLCertificateRequestMessage::getCertificateAuthorityData()
 	return m_Data + offset;
 }
 
-size_t SSLCertificateRequestMessage::getCertificateAuthorityLength()
+size_t SSLCertificateRequestMessage::getCertificateAuthorityLength() const
 {
 	size_t messageLen = getMessageLength();
 	size_t offset = sizeof(ssl_tls_handshake_layer) + sizeof(uint8_t) + m_ClientCertificateTypes.size();
 	if (offset + sizeof(uint16_t) >= messageLen)
 		return 0;
 
-	uint16_t certAuthLen = ntohs(*(uint16_t*)(m_Data + offset));
+	uint16_t certAuthLen = be16toh(*(uint16_t*)(m_Data + offset));
 
 	offset += sizeof(uint16_t);
 
@@ -1652,7 +2018,7 @@ size_t SSLCertificateRequestMessage::getCertificateAuthorityLength()
 	return certAuthLen;
 }
 
-std::string SSLCertificateRequestMessage::toString()
+std::string SSLCertificateRequestMessage::toString() const
 {
 	return "Certificate Request message";
 }
@@ -1662,7 +2028,7 @@ std::string SSLCertificateRequestMessage::toString()
 // SSLCertificateVerifyMessage methods
 // -----------------------------------
 
-uint8_t* SSLCertificateVerifyMessage::getSignedHash()
+uint8_t* SSLCertificateVerifyMessage::getSignedHash() const
 {
 	if (getMessageLength() > sizeof(ssl_tls_handshake_layer))
 		return (m_Data + sizeof(ssl_tls_handshake_layer));
@@ -1670,7 +2036,7 @@ uint8_t* SSLCertificateVerifyMessage::getSignedHash()
 	return NULL;
 }
 
-size_t SSLCertificateVerifyMessage::getSignedHashLength()
+size_t SSLCertificateVerifyMessage::getSignedHashLength() const
 {
 	size_t msgLength = getMessageLength();
 	if (msgLength <= sizeof(ssl_tls_handshake_layer))
@@ -1679,7 +2045,7 @@ size_t SSLCertificateVerifyMessage::getSignedHashLength()
 	return msgLength - sizeof(ssl_tls_handshake_layer);
 }
 
-std::string SSLCertificateVerifyMessage::toString()
+std::string SSLCertificateVerifyMessage::toString() const
 {
 	return "Certificate Verify message";
 }
@@ -1688,7 +2054,7 @@ std::string SSLCertificateVerifyMessage::toString()
 // SSLFinishedMessage methods
 // --------------------------
 
-uint8_t* SSLFinishedMessage::getSignedHash()
+uint8_t* SSLFinishedMessage::getSignedHash() const
 {
 	if (getMessageLength() > sizeof(ssl_tls_handshake_layer))
 		return (m_Data + sizeof(ssl_tls_handshake_layer));
@@ -1696,7 +2062,7 @@ uint8_t* SSLFinishedMessage::getSignedHash()
 	return NULL;
 }
 
-size_t SSLFinishedMessage::getSignedHashLength()
+size_t SSLFinishedMessage::getSignedHashLength() const
 {
 	size_t msgLength = getMessageLength();
 	if (msgLength <= sizeof(ssl_tls_handshake_layer))
@@ -1705,7 +2071,7 @@ size_t SSLFinishedMessage::getSignedHashLength()
 	return msgLength - sizeof(ssl_tls_handshake_layer);
 }
 
-std::string SSLFinishedMessage::toString()
+std::string SSLFinishedMessage::toString() const
 {
 	return "Finished message";
 }
@@ -1715,7 +2081,7 @@ std::string SSLFinishedMessage::toString()
 // SSLNewSessionTicketMessage methods
 // ----------------------------------
 
-uint8_t* SSLNewSessionTicketMessage::getSessionTicketData()
+uint8_t* SSLNewSessionTicketMessage::getSessionTicketData() const
 {
 	if (getMessageLength() > sizeof(ssl_tls_handshake_layer))
 		return (m_Data + sizeof(ssl_tls_handshake_layer));
@@ -1723,7 +2089,7 @@ uint8_t* SSLNewSessionTicketMessage::getSessionTicketData()
 	return NULL;
 }
 
-size_t SSLNewSessionTicketMessage::getSessionTicketDataLength()
+size_t SSLNewSessionTicketMessage::getSessionTicketDataLength() const
 {
 	size_t msgLength = getMessageLength();
 	if (msgLength <= sizeof(ssl_tls_handshake_layer))
@@ -1732,7 +2098,7 @@ size_t SSLNewSessionTicketMessage::getSessionTicketDataLength()
 	return msgLength - sizeof(ssl_tls_handshake_layer);
 }
 
-std::string SSLNewSessionTicketMessage::toString()
+std::string SSLNewSessionTicketMessage::toString() const
 {
 	return "New Session Ticket message";
 }
@@ -1742,14 +2108,14 @@ std::string SSLNewSessionTicketMessage::toString()
 // SSLUnknownMessage methods
 // -------------------------
 
-SSLHandshakeType SSLUnknownMessage::getHandshakeType()
+SSLHandshakeType SSLUnknownMessage::getHandshakeType() const
 {
 	// if message type is unknown, it may be some encrypted message so message type isn't necessarily written
 	// in clear in the first byte. So always return SSL_HANDSHAKE_UNKNOWN
 	return SSL_HANDSHAKE_UNKNOWN;
 }
 
-size_t SSLUnknownMessage::getMessageLength()
+size_t SSLUnknownMessage::getMessageLength() const
 {
 	// if message type is unknown, it may be some encrypted message so message length isn't necessarily written
 	// in clear. So in this case assume message is in length of all remaining data
@@ -1757,7 +2123,7 @@ size_t SSLUnknownMessage::getMessageLength()
 }
 
 
-std::string SSLUnknownMessage::toString()
+std::string SSLUnknownMessage::toString() const
 {
 	return "Unknown message";
 }

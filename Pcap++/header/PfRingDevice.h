@@ -5,7 +5,8 @@
 #include "MacAddress.h"
 #include "SystemUtils.h"
 #include "Packet.h"
-#include <pthread.h>
+#include <thread>
+#include <condition_variable>
 
 /// @file
 
@@ -36,7 +37,7 @@ namespace pcpp
 
 		struct CoreConfiguration
 		{
-			pthread_t RxThread;
+			std::thread RxThread;
 			pfring* Channel;
 			bool IsInUse;
 			bool IsAffinitySet;
@@ -47,7 +48,7 @@ namespace pcpp
 
 		pfring** m_PfRingDescriptors;
 		uint8_t m_NumOfOpenedRxChannels;
-		char m_DeviceName[30];
+		std::string m_DeviceName;
 		int m_InterfaceIndex;
 		MacAddress m_MacAddress;
 		int m_DeviceMTU;
@@ -62,15 +63,15 @@ namespace pcpp
 		PfRingDevice(const char* deviceName);
 
 		bool initCoreConfigurationByCoreMask(CoreMask coreMask);
-		static void* captureThreadMain(void *ptr);
+		void captureThreadMain(std::condition_variable* startCond, std::mutex* startMutex, const int* startState);
 
 		int openSingleRxChannel(const char* deviceName, pfring** ring);
 
-		inline bool getIsHwClockEnable() { setPfRingDeviceAttributes(); return m_HwClockEnabled; }
+		bool getIsHwClockEnable() { setPfRingDeviceAttributes(); return m_HwClockEnabled; }
 		bool setPfRingDeviceClock(pfring* ring);
 
 		void clearCoreConfiguration();
-		int getCoresInUseCount();
+		int getCoresInUseCount() const;
 
 		void setPfRingDeviceAttributes();
 
@@ -138,7 +139,7 @@ namespace pcpp
 		 * Gets the interface name (e.g eth0, eth1, etc.)
 		 * @return The interface name
 		 */
-		inline std::string getDeviceName() { return std::string(m_DeviceName); }
+		std::string getDeviceName() const { return m_DeviceName; }
 
 
 		/**
@@ -205,45 +206,45 @@ namespace pcpp
 		 * opened for each RX queue
 		 * @return Number of opened RX channels
 		 */
-		inline uint8_t getNumOfOpenedRxChannels() { return m_NumOfOpenedRxChannels; }
+		uint8_t getNumOfOpenedRxChannels() const { return m_NumOfOpenedRxChannels; }
 
 		/**
 		 * Gets the total number of RX channels (RX queues) this interface has
 		 * @return The number of RX channels (queues) for this interface
 		 */
-		uint8_t getTotalNumOfRxChannels();
+		uint8_t getTotalNumOfRxChannels() const;
 
 		/**
 		 * Gets the core used in the current thread context
 		 * @return The system core used in the current thread context
 		 */
-		SystemCore getCurrentCoreId();
+		SystemCore getCurrentCoreId() const;
 
 		/**
 		 * Get the statistics of a specific thread/core (=RX channel)
 		 * @param[in] core The requested core
-		 * @param[out] stats A reference for the stats object where the stats are written. Current values will be overriden
+		 * @param[out] stats A reference for the stats object where the stats are written. Current values will be overridden
 		 */
-		void getThreadStatistics(SystemCore core, PfRingStats& stats);
+		void getThreadStatistics(SystemCore core, PfRingStats& stats) const;
 
 		/**
 		 * Get the statistics of the current thread/core (=RX channel)
-		 * @param[out] stats A reference for the stats object where the stats are written. Current values will be overriden
+		 * @param[out] stats A reference for the stats object where the stats are written. Current values will be overridden
 		 */
-		void getCurrentThreadStatistics(PfRingStats& stats);
+		void getCurrentThreadStatistics(PfRingStats& stats) const;
 
 		/**
 		 * Get the statistics for the entire device. If more than 1 RX channel is opened, this method aggregates the stats
 		 * of all channels
-		 * @param[out] stats A reference for the stats object where the stats are written. Current values will be overriden
+		 * @param[out] stats A reference for the stats object where the stats are written. Current values will be overridden
 		 */
-		void getStatistics(PfRingStats& stats);
+		void getStatistics(PfRingStats& stats) const;
 
 		/**
 		 * Return true if filter is currently set
 		 * @return True if filter is currently set, false otherwise
 		 */
-		bool isFilterCurrentlySet();
+		bool isFilterCurrentlySet() const;
 
 		/**
 		 * Send a raw packet. This packet must be fully specified (the MAC address up)

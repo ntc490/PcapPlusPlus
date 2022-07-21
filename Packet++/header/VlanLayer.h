@@ -3,9 +3,6 @@
 
 #include "Layer.h"
 #include "EthLayer.h"
-#if defined(WIN32) || defined(WINx64)
-#include <winsock2.h>
-#endif
 
 /// @file
 
@@ -21,7 +18,8 @@ namespace pcpp
 	 * Represents a VLAN header
 	 */
 #pragma pack(push, 1)
-	struct vlan_header {
+	struct vlan_header
+	{
 		/**
 		   @verbatim
 		   0                 1
@@ -58,9 +56,9 @@ namespace pcpp
 		 * @param[in] vlanID VLAN ID
 		 * @param[in] cfi CFI value
 		 * @param[in] priority Priority value
-		 * @param[in] etherType Protocol EtherType of the next layer
+		 * @param[in] etherType Protocol EtherType of the next layer. It's an optional parameter, a value of 0 will be set if not provided
 		 */
-		VlanLayer(const uint16_t vlanID, bool cfi, uint8_t priority, uint16_t etherType);
+		VlanLayer(const uint16_t vlanID, bool cfi, uint8_t priority, uint16_t etherType = 0);
 
 		~VlanLayer() {}
 
@@ -68,7 +66,7 @@ namespace pcpp
 		 * Get a pointer to the VLAN header. Notice this points directly to the data, so every change will change the actual packet data
 		 * @return A pointer to the vlan_header
 		 */
-		inline vlan_header* getVlanHeader() const { return (vlan_header*)m_Data; }
+		vlan_header* getVlanHeader() const { return (vlan_header*)m_Data; }
 
 		/**
 		 * Get the VLAN ID value. This method differs from vlan_header#vlanID because vlan_header#vlanID is 12 bits long in a 16 bit field.
@@ -122,14 +120,14 @@ namespace pcpp
 		/**
 		 * @return Size of vlan_header
 		 */
-		inline size_t getHeaderLen() { return sizeof(vlan_header); }
+		size_t getHeaderLen() const { return sizeof(vlan_header); }
 
 		/**
-		 * Does nothing for this layer
+		 * Calculate the EtherType for known protocols: IPv4, IPv6, ARP, VLAN
 		 */
-		void computeCalculateFields() {}
+		void computeCalculateFields();
 
-		std::string toString();
+		std::string toString() const;
 
 		OsiModelLayer getOsiModelLayer() const { return OsiModelDataLinkLayer; }
 	};

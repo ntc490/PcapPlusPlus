@@ -19,7 +19,8 @@ namespace pcpp
 	 * Represents an ARP protocol header
 	 */
 #pragma pack(push, 1)
-	struct arphdr {
+	struct arphdr
+	{
 		/** Hardware type (HTYPE) */
 		uint16_t hardwareType;
 		/** Protocol type (PTYPE). The permitted PTYPE values share a numbering space with those for EtherType */
@@ -74,7 +75,7 @@ namespace pcpp
 		 * @param[in] senderIpAddr The sender IP address (will be put in arphdr#senderIpAddr)
 		 * @param[in] targetIpAddr The target IP address (will be put in arphdr#targetIpAddr)
 		 */
-		ArpLayer(ArpOpcode opCode, const MacAddress& senderMacAddr, const MacAddress& targetMacAddr, const IPv4Address senderIpAddr, const IPv4Address& targetIpAddr);
+		ArpLayer(ArpOpcode opCode, const MacAddress& senderMacAddr, const MacAddress& targetMacAddr, const IPv4Address& senderIpAddr, const IPv4Address& targetIpAddr);
 
 		~ArpLayer() {}
 
@@ -100,14 +101,13 @@ namespace pcpp
 		 * Get the sender protocol address (SPA) in the form of IPv4Address
 		 * @return An IPv4Address containing the sender protocol address (SPA)
 		 */
-		inline IPv4Address getSenderIpAddr() const { return IPv4Address(getArpHeader()->senderIpAddr); }
+		inline IPv4Address getSenderIpAddr() const { return getArpHeader()->senderIpAddr; }
 
 		/**
 		 * Get the target protocol address (TPA) in the form of IPv4Address
 		 * @return An IPv4Address containing the target protocol address (TPA)
 		 */
-		inline IPv4Address getTargetIpAddr() const { return IPv4Address(getArpHeader()->targetIpAddr); }
-
+		inline IPv4Address getTargetIpAddr() const { return getArpHeader()->targetIpAddr; }
 
 		// implement abstract methods
 
@@ -119,7 +119,7 @@ namespace pcpp
 		/**
 		 * @return The size of @ref arphdr
 		 */
-		inline size_t getHeaderLen() { return sizeof(arphdr); }
+		size_t getHeaderLen() const { return sizeof(arphdr); }
 
 		/**
 		 * Calculate the following fields:
@@ -127,11 +127,11 @@ namespace pcpp
 		 * - @ref arphdr#hardwareSize = 6
 		 * - @ref arphdr#protocolType = ETHERTYPE_IP (assume IPv4 over ARP)
 		 * - @ref arphdr#protocolSize = 4 (assume IPv4 over ARP)
-		 * - if it's an ARP requst: @ref arphdr#targetMacAddr = MacAddress("00:00:00:00:00:00")
+		 * - if it's an ARP request: @ref arphdr#targetMacAddr = MacAddress("00:00:00:00:00:00")
 		 */
 		void computeCalculateFields();
 
-		std::string toString();
+		std::string toString() const;
 
 		OsiModelLayer getOsiModelLayer() const { return OsiModelNetworkLayer; }
 	};

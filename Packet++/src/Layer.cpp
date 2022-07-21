@@ -16,7 +16,7 @@ Layer::~Layer()
 
 Layer::Layer(const Layer& other) : m_Packet(NULL), m_Protocol(other.m_Protocol), m_NextLayer(NULL), m_PrevLayer(NULL), m_IsAllocatedInPacket(false)
 {
-	m_DataLen = ((Layer&)other).getHeaderLen();
+	m_DataLen = other.getHeaderLen();
 	m_Data = new uint8_t[other.m_DataLen];
 	memcpy(m_Data, other.m_Data, other.m_DataLen);
 }
@@ -29,7 +29,7 @@ Layer& Layer::operator=(const Layer& other)
 	if (m_Data != NULL)
 		delete [] m_Data;
 
-	m_DataLen = ((Layer&)other).getHeaderLen();
+	m_DataLen = other.getHeaderLen();
 	m_Packet = NULL;
 	m_Protocol = other.m_Protocol;
 	m_NextLayer = NULL;
@@ -41,7 +41,7 @@ Layer& Layer::operator=(const Layer& other)
 	return *this;
 }
 
-void Layer::copyData(uint8_t* toArr)
+void Layer::copyData(uint8_t* toArr) const
 {
 	memcpy(toArr, m_Data, m_DataLen);
 }
@@ -50,7 +50,7 @@ bool Layer::extendLayer(int offsetInLayer, size_t numOfBytesToExtend)
 {
 	if (m_Data == NULL)
 	{
-		LOG_ERROR("Layer's data is NULL");
+		PCPP_LOG_ERROR("Layer's data is NULL");
 		return false;
 	}
 
@@ -58,7 +58,7 @@ bool Layer::extendLayer(int offsetInLayer, size_t numOfBytesToExtend)
 	{
 		if ((size_t)offsetInLayer > m_DataLen)
 		{
-			LOG_ERROR("Requested offset is larger than data length");
+			PCPP_LOG_ERROR("Requested offset is larger than data length");
 			return false;
 		}
 
@@ -78,7 +78,7 @@ bool Layer::shortenLayer(int offsetInLayer, size_t numOfBytesToShorten)
 {
 	if (m_Data == NULL)
 	{
-		LOG_ERROR("Layer's data is NULL");
+		PCPP_LOG_ERROR("Layer's data is NULL");
 		return false;
 	}
 
@@ -86,7 +86,7 @@ bool Layer::shortenLayer(int offsetInLayer, size_t numOfBytesToShorten)
 	{
 		if ((size_t)offsetInLayer >= m_DataLen)
 		{
-			LOG_ERROR("Requested offset is larger than data length");
+			PCPP_LOG_ERROR("Requested offset is larger than data length");
 			return false;
 		}
 

@@ -116,9 +116,9 @@ namespace pcpp
 		 * This IP address can be used to track the RTP data relevant for the call. This method extracts this IP address from the 'originator' field and returns it.
 		 * A value of IPv4Address#Zero will be returned in the following cases: (1) if 'originator' field doesn't exist; (2) if it doesn't contain the IP address;
 		 * (3) if it contains a non-IPv4 address
-		 * @return Te IP address of the the machine from which the session is created
+		 * @return The IP address of the the machine from which the session is created
 		 */
-		IPv4Address getOwnerIPv4Address();
+		IPv4Address getOwnerIPv4Address() const;
 
 		/**
 		 * The 'media-description' field (m=) contains the transport port to which the media stream is sent. This port can be used to track the RTP data relevant for the call.
@@ -128,7 +128,7 @@ namespace pcpp
 		 * @param[in] mediaType The media type to search in
 		 * @return The transport port to which the media stream is sent
 		 */
-		uint16_t getMediaPort(std::string mediaType);
+		uint16_t getMediaPort(std::string mediaType) const;
 
 		/**
 		 * Adds a 'media-description' field (m=) with all necessary data and attribute fields (a=) with data relevant for this media.<BR>
@@ -153,15 +153,15 @@ namespace pcpp
 
 		// overridden methods
 
-        OsiModelLayer getOsiModelLayer() const { return OsiModelSesionLayer; }
+		OsiModelLayer getOsiModelLayer() const { return OsiModelSesionLayer; }
 
-		std::string toString();
+		std::string toString() const;
 
 	protected:
 
 		// implementation of abstract methods
-		char getHeaderFieldNameValueSeparator() { return '='; }
-		bool spacesAllowedBetweenHeaderFieldNameAndValue() { return false; }
+		char getHeaderFieldNameValueSeparator() const { return '='; }
+		bool spacesAllowedBetweenHeaderFieldNameAndValue() const { return false; }
 
 	};
 }

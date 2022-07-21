@@ -13,12 +13,15 @@ mkdir -p $INSTALL_DIR/include/pcapplusplus
 cp header/* $INSTALL_DIR/include/pcapplusplus
 
 # copy examples
-mkdir -p $INSTALL_DIR/bin
-cp examples/* $INSTALL_DIR/bin
+if [ -d "examples/" ]
+then
+  mkdir -p $INSTALL_DIR/bin
+  cp examples/* $INSTALL_DIR/bin
+fi
 
-# create template makefile 
+# create template makefile
 cp mk/PcapPlusPlus.mk PcapPlusPlus.mk
-sed -i.bak '/PCAPPLUSPLUS_HOME :=/d' PcapPlusPlus.mk && rm PcapPlusPlus.mk.bak 
+sed -i.bak '/PCAPPLUSPLUS_HOME :=/d' PcapPlusPlus.mk && rm PcapPlusPlus.mk.bak
 sed -i.bak '/# libs dir/d' PcapPlusPlus.mk && rm PcapPlusPlus.mk.bak
 sed -i.bak '/PCAPPP_LIBS_DIR :=/d' PcapPlusPlus.mk && rm PcapPlusPlus.mk.bak
 sed -i.bak "s|PCAPPP_INCLUDES :=.*|PCAPPP_INCLUDES := -I$INSTALL_DIR/include/pcapplusplus|g" PcapPlusPlus.mk && rm PcapPlusPlus.mk.bak
@@ -34,11 +37,11 @@ echo 'Description: a multiplatform C++ network sniffing and packet parsing and c
 printf 'Version: '>>PcapPlusPlus.pc
 grep '#define PCAPPLUSPLUS_VERSION ' header/PcapPlusPlusVersion.h | cut -d " " -f3 | tr -d "\"" | tr -d '\n'>>PcapPlusPlus.pc
 printf '\n'>>PcapPlusPlus.pc
-echo 'URL: https://seladb.github.io/PcapPlusPlus-Doc'>>PcapPlusPlus.pc
-printf 'Libs: '>>PcapPlusPlus.pc
+echo 'URL: https://pcapplusplus.github.io'>>PcapPlusPlus.pc
+printf 'Libs: -L${libdir} '>>PcapPlusPlus.pc
 grep PCAPPP_LIBS PcapPlusPlus.mk | cut -d " " -f3- | tr -d '\r' | tr '\n' ' '>>PcapPlusPlus.pc
-printf '\nCFlags: '>>PcapPlusPlus.pc
-grep PCAPPP_INCLUDES PcapPlusPlus.mk | cut -d " " -f3- | tr -d '\r' | tr '\n' ' '>>PcapPlusPlus.pc
+printf '\nCFlags: -I${includedir}/pcapplusplus '>>PcapPlusPlus.pc
+grep PCAPPP_INCLUDES PcapPlusPlus.mk | sed -n '1!p' | cut -d " " -f3- | tr -d '\r' | tr '\n' ' '>>PcapPlusPlus.pc
 printf '\n'>>PcapPlusPlus.pc
 
 # copy template makefile

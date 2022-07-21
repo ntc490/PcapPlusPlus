@@ -17,7 +17,8 @@ namespace pcpp
 	 * Represents an UDP protocol header
 	 */
 #pragma pack(push,1)
-	struct udphdr {
+	struct udphdr
+	{
 		/** Source port */
 		uint16_t portSrc;
 		/** Destination port */
@@ -57,7 +58,17 @@ namespace pcpp
 		 * Get a pointer to the UDP header. Notice this points directly to the data, so every change will change the actual packet data
 		 * @return A pointer to the @ref udphdr
 		 */
-		inline udphdr* getUdpHeader() const { return (udphdr*)m_Data; }
+		udphdr* getUdpHeader() const { return (udphdr*)m_Data; }
+
+		/**
+		 * @return UDP source port
+		 */
+		uint16_t getSrcPort() const;
+
+		/**
+		 * @return UDP destination port
+		 */
+		uint16_t getDstPort() const;
 
 		/**
 		 * Calculate the checksum from header and data and possibly write the result to @ref udphdr#headerChecksum
@@ -77,16 +88,16 @@ namespace pcpp
 		/**
 		 * @return Size of @ref udphdr
 		 */
-		inline size_t getHeaderLen() { return sizeof(udphdr); }
+		size_t getHeaderLen() const { return sizeof(udphdr); }
 
 		/**
 		 * Calculate @ref udphdr#headerChecksum field
 		 */
 		void computeCalculateFields();
 
-		std::string toString();
+		std::string toString() const;
 
-        OsiModelLayer getOsiModelLayer() const { return OsiModelTransportLayer; }
+		OsiModelLayer getOsiModelLayer() const { return OsiModelTransportLayer; }
 	};
 
 } // namespace pcpp

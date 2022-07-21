@@ -10,21 +10,29 @@ endif
 
 include ../../mk/PcapPlusPlus.mk
 
-SOURCES := $(wildcard *.cpp)
-OBJS_FILENAMES := $(patsubst %.cpp,Obj/%.o,$(SOURCES))
+ifeq ($(wildcard ../../3rdParty/MemPlumber/Makefile.defs),)
+  $(error MemPlumber/Makefile.defs not found!)
+endif
 
-DEBUG_NEW_HOME := ../../3rdParty/debug-new
-DEBUG_NEW_SOURCES := $(wildcard $(DEBUG_NEW_HOME)/*.cpp)
-DEBUG_NEW_OBJS_FILENAMES := $(patsubst %.cpp,$(DEBUG_NEW_HOME)/%.o,$(DEBUG_NEW_SOURCES))
+include ../../3rdParty/MemPlumber/Makefile.defs
+
+rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
+
+SOURCES := $(call rwildcard,.,*.cpp)
+
+OBJS_FILENAMES := $(patsubst ./%,Obj/%,$(SOURCES:.cpp=.o))
+
+
+COMMON_DEBUG_LIB_DIR := -L../../Common++/Lib/Debug
+
 ENDIAN_PORTABLE_INCLUDE := $(PCAPPLUSPLUS_HOME)/3rdParty/EndianPortable/include
 
-PCAPPP_INCLUDES += -I$(DEBUG_NEW_HOME) -I$(ENDIAN_PORTABLE_INCLUDE)
+PCPP_TEST_FRAMEWORK := ../PcppTestFramework
+
+PCAPPP_INCLUDES += -I$(MEMPLUMBER_INCLUDES) -I$(ENDIAN_PORTABLE_INCLUDE) -I$(PCPP_TEST_FRAMEWORK)
 
 ifdef WIN32
 DEPS := -DHAVE_STRUCT_TIMESPEC
-endif
-ifdef LINUX
-DEPS := -DLINUX
 endif
 ifdef PF_RING_HOME
 DEPS += -DUSE_PF_RING
@@ -32,15 +40,13 @@ endif
 ifdef USE_DPDK
 DEPS += -DUSE_DPDK
 endif
-ifdef MAC_OS_X
-DEPS := -DMAC_OS_X
+ifdef HAS_SET_DIRECTION_ENABLED
+DEPS += -DHAS_SET_DIRECTION_ENABLED
 endif
 
-COMMON_DEBUG_LIB_DIR := -L../../Common++/Lib/Debug
-
 Obj/%.o: %.cpp
-	@echo 'Building file: $<'
-	@$(CXX) $(DEPS) $(PCAPPP_INCLUDES) $(PCAPPP_BUILD_FLAGS) -O2 -g -Wall -c -fmessage-length=0 -MMD -MP -MF"$(@:Obj/%.o=Obj/%.d)" -MT"$(@:Obj/%.o=Obj/%.d)" -o "$@" "$<"
+	@echo Building file: $<
+	@$(CXX) $(DEPS) $(PCAPPP_INCLUDES) $(PCAPPP_BUILD_FLAGS) -c -fmessage-length=0 -MMD -MP -MF"$(@:Obj/%.o=Obj/%.d)" -MT"$(@:Obj/%.o=Obj/%.d)" -o "$@" "$<"
 
 
 UNAME := $(shell uname)
@@ -51,24 +57,26 @@ CUR_TARGET := $(notdir $(shell pwd))
 all: dependents Pcap++Test
 
 start:
-	@echo '==> Building target: $(CUR_TARGET)'
+	@echo ==== Building target: $(CUR_TARGET) ====
 
 create-directories:
 	@$(MKDIR) -p Obj
+	@$(MKDIR) -p Obj/Tests
+	@$(MKDIR) -p Obj/Common
 	@$(MKDIR) -p Bin
 
 dependents:
-	cd $(PCAPPLUSPLUS_HOME) && $(MAKE) libs
-	
+	@cd $(PCAPPLUSPLUS_HOME) && $(MAKE) libs
+
 Pcap++Test: start create-directories $(OBJS_FILENAMES)
-	@cd $(DEBUG_NEW_HOME) && $(MAKE) debug_new_sources
-	@$(CXX) $(COMMON_DEBUG_LIB_DIR) $(PCAPPP_LIBS_DIR) $(PCAPPP_BUILD_FLAGS) -o "./Bin/Pcap++Test$(BIN_EXT)" $(OBJS_FILENAMES) $(DEBUG_NEW_OBJS_FILENAMES) $(PCAPPP_LIBS)
+	@cd $(MEMPLUMBER_HOME) && $(MAKE) memplumber_sources
+	@$(CXX) $(COMMON_DEBUG_LIB_DIR) $(PCAPPP_LIBS_DIR) $(PCAPPP_BUILD_FLAGS) -o "./Bin/Pcap++Test$(BIN_EXT)" $(OBJS_FILENAMES) $(MEMPLUMBER_OBJS_FILENAMES) $(PCAPPP_LIBS)
 	@$(PCAPPP_POST_BUILD)
-	@echo 'Finished successfully building: $(CUR_TARGET)'
+	@echo Finished successfully building: $(CUR_TARGET)
 	@echo ' '
 
 clean:
-	@cd $(DEBUG_NEW_HOME) && $(MAKE) clean
+	@cd $(MEMPLUMBER_HOME) && $(MAKE) clean
 	@$(RM) -rf ./Obj/*
 	@$(RM) -rf ./Bin/*
-	@echo 'Clean finished: $(CUR_TARGET)'
+	@echo Clean finished: $(CUR_TARGET)

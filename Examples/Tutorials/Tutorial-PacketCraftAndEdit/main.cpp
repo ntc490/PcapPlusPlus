@@ -1,7 +1,6 @@
-#if !defined(WIN32) && !defined(WINx64)
-#include <in.h> // this is for using ntohs() and htons() on non-Windows OS's
-#endif
+#include <iostream>
 #include "stdlib.h"
+#include "SystemUtils.h"
 #include "Packet.h"
 #include "EthLayer.h"
 #include "VlanLayer.h"
@@ -24,22 +23,22 @@ int main(int argc, char* argv[])
 	// verify that a reader interface was indeed created
 	if (reader == NULL)
 	{
-		printf("Cannot determine reader for file type\n");
-		exit(1);
+		std::cerr << "Cannot determine reader for file type" << std::endl;
+		return 1;
 	}
 
 	// open the reader for reading
 	if (!reader->open())
 	{
-		printf("Cannot open input.pcap for reading\n");
-		exit(1);
+		std::cerr << "Cannot open input.pcap for reading" << std::endl;
+		return 1;
 	}
 
 	// read the first (and only) packet from the file
 	pcpp::RawPacket rawPacket;
 	if (!reader->getNextPacket(rawPacket))
 	{
-		printf("Couldn't read the first packet in the file\n");
+		std::cerr << "Couldn't read the first packet in the file" << std::endl;
 		return 1;
 	}
 
@@ -57,16 +56,16 @@ int main(int argc, char* argv[])
 	// let's get the IPv4 layer
 	pcpp::IPv4Layer* ipLayer = parsedPacket.getLayerOfType<pcpp::IPv4Layer>();
 	// change source IP address
-	ipLayer->setSrcIpAddress(pcpp::IPv4Address(std::string("1.1.1.1")));
+	ipLayer->setSrcIPv4Address(pcpp::IPv4Address("1.1.1.1"));
 	// change IP ID
-	ipLayer->getIPv4Header()->ipId = htons(4000);
+	ipLayer->getIPv4Header()->ipId = pcpp::hostToNet16(4000);
 	// change TTL value
 	ipLayer->getIPv4Header()->timeToLive = 12;
 
 	// let's get the TCP layer
 	pcpp::TcpLayer* tcpLayer = parsedPacket.getLayerOfType<pcpp::TcpLayer>();
 	// change source port
-	tcpLayer->getTcpHeader()->portSrc = htons(12345);
+	tcpLayer->getTcpHeader()->portSrc = pcpp::hostToNet16(12345);
 	// add URG flag
 	tcpLayer->getTcpHeader()->urgFlag = 1;
 	// add MSS TCP option
@@ -110,8 +109,8 @@ int main(int argc, char* argv[])
 	pcpp::EthLayer newEthernetLayer(pcpp::MacAddress("00:50:43:11:22:33"), pcpp::MacAddress("aa:bb:cc:dd:ee"));
 
 	// create a new IPv4 layer
-	pcpp::IPv4Layer newIPLayer(pcpp::IPv4Address(std::string("192.168.1.1")), pcpp::IPv4Address(std::string("10.0.0.1")));
-	newIPLayer.getIPv4Header()->ipId = htons(2000);
+	pcpp::IPv4Layer newIPLayer(pcpp::IPv4Address("192.168.1.1"), pcpp::IPv4Address("10.0.0.1"));
+	newIPLayer.getIPv4Header()->ipId = pcpp::hostToNet16(2000);
 	newIPLayer.getIPv4Header()->timeToLive = 64;
 
 	// create a new UDP layer

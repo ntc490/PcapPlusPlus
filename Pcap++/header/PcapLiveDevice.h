@@ -5,9 +5,15 @@
 #include "PcapDevice.h"
 #include <vector>
 #include <string.h>
+#include <thread>
 #include "IpAddress.h"
 #include "Packet.h"
 
+// forward declarations for structs and typedefs that are defined in pcap.h
+struct pcap_if;
+typedef pcap_if pcap_if_t;
+struct pcap_addr;
+typedef struct pcap_addr pcap_addr_t;
 
 /// @file
 
@@ -46,12 +52,10 @@ namespace pcpp
 	 * @param[in] stats A reference to the most updated stats
 	 * @param[in] userCookie A pointer to the object put by the user when packet capturing stared
 	 */
-	typedef void (*OnStatsUpdateCallback)(pcap_stat& stats, void* userCookie);
+	typedef void (*OnStatsUpdateCallback)(IPcapDevice::PcapStats& stats, void* userCookie);
 
 	// for internal use only
 	typedef void* (*ThreadStart)(void*);
-
-	struct PcapThread;
 
 	/**
 	 * @class PcapLiveDevice
@@ -78,19 +82,19 @@ namespace pcpp
 		friend class PcapLiveDeviceList;
 	protected:
 		// This is a second descriptor for the same device. It is needed because of a bug
-		// that occurs in libpcap on Linux (on Windows using WinPcap it works well):
+		// that occurs in libpcap on Linux (on Windows using WinPcap/Npcap it works well):
 		// It's impossible to capture packets sent by the same descriptor
 		pcap_t* m_PcapSendDescriptor;
-		const char* m_Name;
-		const char* m_Description;
+		std::string m_Name;
+		std::string m_Description;
 		bool m_IsLoopback;
-		uint16_t m_DeviceMtu;
+		uint32_t m_DeviceMtu;
 		std::vector<pcap_addr_t> m_Addresses;
 		MacAddress m_MacAddress;
 		IPv4Address m_DefaultGateway;
-		PcapThread* m_CaptureThread;
+		std::thread m_CaptureThread;
 		bool m_CaptureThreadStarted;
-		PcapThread* m_StatsThread;
+		std::thread m_StatsThread;
 		bool m_StatsThreadStarted;
 		bool m_StopThread;
 		OnPacketArrivesCallback m_cbOnPacketArrives;
@@ -113,13 +117,14 @@ namespace pcpp
 		void setDeviceMtu();
 		void setDeviceMacAddress();
 		void setDefaultGateway();
-		static void* captureThreadMain(void *ptr);
-		static void* statsThreadMain(void *ptr);
-		static void onPacketArrives(uint8_t *user, const struct pcap_pkthdr *pkthdr, const uint8_t *packet);
-		static void onPacketArrivesNoCallback(uint8_t *user, const struct pcap_pkthdr *pkthdr, const uint8_t *packet);
-		static void onPacketArrivesBlockingMode(uint8_t *user, const struct pcap_pkthdr *pkthdr, const uint8_t *packet);
-		std::string printThreadId(PcapThread* id);
-		virtual ThreadStart getCaptureThreadStart();
+
+		// threads
+		void captureThreadMain();
+		void statsThreadMain();
+
+		static void onPacketArrives(uint8_t* user, const struct pcap_pkthdr* pkthdr, const uint8_t* packet);
+		static void onPacketArrivesNoCallback(uint8_t* user, const struct pcap_pkthdr* pkthdr, const uint8_t* packet);
+		static void onPacketArrivesBlockingMode(uint8_t* user, const struct pcap_pkthdr* pkthdr, const uint8_t* packet);
 	public:
 
 		/**
@@ -129,9 +134,9 @@ namespace pcpp
 		{
 			/** libPcap live device */
 			LibPcapDevice,
-			/** WinPcap live device */
+			/** WinPcap/Npcap live device */
 			WinPcapDevice,
-			/** WinPcap Remote Capture device */
+			/** WinPcap/Npcap Remote Capture device */
 			RemoteDevice
 		};
 
@@ -145,6 +150,20 @@ namespace pcpp
 			Normal = 0,
 			/** All packets that arrive to the NIC are captured, even packets that their destination isn't this NIC */
 			Promiscuous = 1
+		};
+
+
+		/**
+		 * Set direction for capturing packets (you can read more here: <https://www.tcpdump.org/manpages/pcap.3pcap.html#lbAI>)
+		 */
+		enum PcapDirection
+		{
+			/** Capture traffics both incoming and outgoing */
+			PCPP_INOUT = 0,
+			/** Only capture incoming traffics */
+			PCPP_IN,
+			/** Only capture outgoing traffics */
+			PCPP_OUT
 		};
 
 
@@ -175,18 +194,43 @@ namespace pcpp
 			int packetBufferSize;
 
 			/**
+			 * Set the direction for capturing packets. You can read more here:
+			 * <https://www.tcpdump.org/manpages/pcap.3pcap.html#lbAI>.
+			*/
+			PcapDirection direction;
+
+			/**
+			 * Set the snapshot length. Snapshot length is the amount of data for each frame that is actually captured. Note that taking
+			 * larger snapshots both increases the amount of time it takes to process packets and, effectively, decreases the amount of
+			 * packet buffering. This may cause packets to be lost. Note also that taking smaller snapshots will discard data from protocols
+			 * above the transport layer, which loses information that may be important.
+			 * You can read more here:
+			 * https://wiki.wireshark.org/SnapLen
+			*/
+			int snapshotLength;
+
+			/**
 			 * A c'tor for this struct
 			 * @param[in] mode The mode to open the device: promiscuous or non-promiscuous. Default value is promiscuous
 			 * @param[in] packetBufferTimeoutMs Buffer timeout in millisecond. Default value is 0 which means set timeout of
 			 * 1 or -1 (depends on the platform)
 			 * @param[in] packetBufferSize The packet buffer size. Default value is 0 which means use the default value
 			 * (varies between different OS's)
-			 */
-			DeviceConfiguration(DeviceMode mode = Promiscuous, int packetBufferTimeoutMs = 0, int packetBufferSize = 0)
+			 * @param[in] direction Direction for capturing packets. Default value is INOUT which means capture both incoming
+			 * and outgoing packets (not all platforms support this)
+			 * @param[in] snapshotLength Snapshot length for capturing packets. Default value is 0 which means use the default value.
+			 * A snapshot length of 262144 should be big enough for maximum-size Linux loopback packets (65549) and some USB packets
+			 * captured with USBPcap (> 131072, < 262144). A snapshot length of 65535 should be sufficient, on most if not all networks,
+			 * to capture all the data available from the packet.
+			*/
+			DeviceConfiguration(DeviceMode mode = Promiscuous, int packetBufferTimeoutMs = 0, int packetBufferSize = 0,
+				                PcapDirection direction = PCPP_INOUT, int snapshotLength = 0)
 			{
 				this->mode = mode;
 				this->packetBufferTimeoutMs = packetBufferTimeoutMs;
 				this->packetBufferSize = packetBufferSize;
+				this->direction = direction;
+				this->snapshotLength = snapshotLength;
 			}
 		};
 
@@ -197,62 +241,63 @@ namespace pcpp
 		virtual ~PcapLiveDevice();
 
 		/**
-		 * @return The type of the device (libPcap, WinPcap or a remote device)
+		 * @return The type of the device (libPcap, WinPcap/Npcap or a remote device)
 		 */
-		virtual LiveDeviceType getDeviceType() { return LibPcapDevice; }
+		virtual LiveDeviceType getDeviceType() const { return LibPcapDevice; }
 
 		/**
 		 * @return The name of the device (e.g eth0), taken from pcap_if_t->name
 		 */
-		inline const char* getName() { return m_Name; }
+		std::string getName() const { return m_Name; }
 
 		/**
 		 * @return A human-readable description of the device, taken from pcap_if_t->description. May be NULL in some interfaces
 		 */
-		inline const char* getDesc() { return m_Description; }
+		std::string getDesc() const { return m_Description; }
 
 		/**
 		 * @return True if this interface is a loopback interface, false otherwise
 		 */
-		inline bool getLoopback() { return m_IsLoopback; }
+		bool getLoopback() const { return m_IsLoopback; }
 
 		/**
 		 * @return The device's maximum transmission unit (MTU) in bytes
 		 */
-		virtual inline uint16_t getMtu() { return m_DeviceMtu; }
+		virtual uint32_t getMtu() const { return m_DeviceMtu; }
 
 		/**
 		 * @return The device's link layer type
 		 */
-		virtual inline LinkLayerType getLinkType() { return m_LinkType; }
+		virtual LinkLayerType getLinkType() const { return m_LinkType; }
+
 		/**
 		 * @return A vector containing all addresses defined for this interface, each in pcap_addr_t struct
 		 */
-		inline std::vector<pcap_addr_t>& getAddresses() { return m_Addresses; }
+		const std::vector<pcap_addr_t>& getAddresses() const { return m_Addresses; }
 
 		/**
 		 * @return The MAC address for this interface
 		 */
-		virtual inline MacAddress getMacAddress() { return m_MacAddress; }
+		virtual MacAddress getMacAddress() const { return m_MacAddress; }
 
 		/**
 		 * @return The IPv4 address for this interface. If multiple IPv4 addresses are defined for this interface, the first will be picked.
 		 * If no IPv4 addresses are defined, a zeroed IPv4 address (IPv4Address#Zero) will be returned
 		 */
-		IPv4Address getIPv4Address();
+		IPv4Address getIPv4Address() const;
 
 		/**
 		 * @return The default gateway defined for this interface. If no default gateway is defined, if it's not IPv4 or if couldn't extract
 		 * default gateway IPv4Address#Zero will be returned. If multiple gateways were defined the first one will be returned
 		 */
-		IPv4Address getDefaultGateway();
+		IPv4Address getDefaultGateway() const;
 
 		/**
 		 * @return A list of all DNS servers defined for this machine. If this list is empty it means no DNS servers were defined or they
 		 * couldn't be extracted from some reason. This list is created in PcapLiveDeviceList class and can be also retrieved from there.
 		 * This method exists for convenience - so it'll be possible to get this list from PcapLiveDevice as well
 		 */
-		std::vector<IPv4Address>& getDnsServers();
+		const std::vector<IPv4Address>& getDnsServers() const;
 
 		/**
 		 * Start capturing packets on this network interface (device). Each time a packet is captured the onPacketArrives callback is called.
@@ -356,77 +401,121 @@ namespace pcpp
 		void stopCapture();
 
 		/**
+		 * Check if a capture thread is running
+		 * @return True if a capture thread is currently running
+		 */
+		bool captureActive();
+
+		/**
+		 * Checks whether the packetPayloadLength is larger than the device MTU. Logs an error if check fails
+		 * @param[in] packetPayloadLength The length of the IP layer of the packet
+		 * @return True if the packetPayloadLength is less than or equal to the device MTU
+		 */
+		bool doMtuCheck(int packetPayloadLength);
+
+		/**
 		 * Send a RawPacket to the network
 		 * @param[in] rawPacket A reference to the raw packet to send. This method treats the raw packet as read-only, it doesn't change anything
 		 * in it
+		 * @param[in] checkMtu Whether the length of the packet's payload should be checked against the MTU. If enabled this comes with a small performance penalty.
+		 * Default value is false to avoid performance overhead. Set to true if you don't know whether packets fit the live device's MTU and you can afford the overhead.
 		 * @return True if packet was sent successfully. False will be returned in the following cases (relevant log error is printed in any case):
 		 * - Device is not opened
 		 * - Packet length is 0
 		 * - Packet length is larger than device MTU
-		 * - Packet could not be sent due to some error in libpcap/WinPcap
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
 		 */
-		bool sendPacket(RawPacket const& rawPacket);
+		bool sendPacket(RawPacket const& rawPacket, bool checkMtu = false);
+
+		/**
+		 * Send a buffer containing packet raw data (including all layers) to the network.
+		 * This particular version of the sendPacket method should only be used if you already have access to the size of the network layer of the packet,
+		 * since it allows you to check the payload size (see packetPayloadLength parameter) MTU of the live device without incurring a parsing overhead.
+		 * If the packetPayloadLength is unknown, please use a different implementation of the sendPacket method.
+		 * @param[in] packetData The buffer containing the packet raw data
+		 * @param[in] packetDataLength The length of the buffer (this is the entire packet, including link layer)
+		 * @param[in] packetPayloadLength The length of the payload for the data link layer. This includes all data apart from the header for the
+		 * data link layer.
+		 * @return True if the packet was sent successfully. False will be returned in the following cases (relevant log error is printed in any case):
+		 * - Device is not opened
+		 * - Packet data length is 0
+		 * - Packet payload length is larger than device MTU
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
+		 */
+		bool sendPacket(const uint8_t* packetData, int packetDataLength, int packetPayloadLength);
 
 		/**
 		 * Send a buffer containing packet raw data (including all layers) to the network
 		 * @param[in] packetData The buffer containing the packet raw data
 		 * @param[in] packetDataLength The length of the buffer
+		 * @param[in] checkMtu Whether the length of the packet's payload should be checked against the MTU. If enabled this comes with a small performance penalty.
+		 * Default value is false to avoid performance overhead. Set to true if you don't know whether packets fit the live device's MTU and you can afford the overhead.
+		 * @param[in] linkType Only used if checkMtu is true. Defines the layer type for parsing the first layer of the packet. Used for parsing the packet to
+		 * perform the MTU check. Default value is pcpp::LINKTYPE_ETHERNET. Ensure this parameter matches the linktype of the packet if checkMtu is true.
 		 * @return True if packet was sent successfully. False will be returned in the following cases (relevant log error is printed in any case):
 		 * - Device is not opened
 		 * - Packet length is 0
-		 * - Packet length is larger than device MTU
-		 * - Packet could not be sent due to some error in libpcap/WinPcap
+		 * - Packet length is larger than device MTU and checkMtu is true
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
 		 */
-		bool sendPacket(const uint8_t* packetData, int packetDataLength);
+		bool sendPacket(const uint8_t* packetData, int packetDataLength, bool checkMtu = false, pcpp::LinkLayerType linkType = pcpp::LINKTYPE_ETHERNET);
 
 		/**
 		 * Send a parsed Packet to the network
 		 * @param[in] packet A pointer to the packet to send. This method treats the packet as read-only, it doesn't change anything in it
+		 * @param[in] checkMtu Whether the length of the packet's payload should be checked against the MTU. Default value is true, since the packet
+		 * being passed in has already been parsed, so checking the MTU does not incur significant processing overhead.
 		 * @return True if packet was sent successfully. False will be returned in the following cases (relevant log error is printed in any case):
 		 * - Device is not opened
 		 * - Packet length is 0
-		 * - Packet length is larger than device MTU
-		 * - Packet could not be sent due to some error in libpcap/WinPcap
+		 * - Packet length is larger than device MTU and checkMtu is true
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
 		 */
-		bool sendPacket(Packet* packet);
+		bool sendPacket(Packet* packet, bool checkMtu = true);
 
 		/**
 		 * Send an array of RawPacket objects to the network
 		 * @param[in] rawPacketsArr The array of RawPacket objects to send. This method treats all packets as read-only, it doesn't change anything
 		 * in them
 		 * @param[in] arrLength The length of the array
+		 * @param[in] checkMtu Whether to check the size of the packet payload against MTU size. Incurs a parsing overhead.
+		 * Default value is false to avoid performance overhead. Set to true if you don't know whether packets fit the live device's MTU and you can afford the overhead.
 		 * @return The number of packets sent successfully. Sending a packet can fail if:
 		 * - Device is not opened. In this case no packets will be sent, return value will be 0
 		 * - Packet length is 0
-		 * - Packet length is larger than device MTU
-		 * - Packet could not be sent due to some error in libpcap/WinPcap
+		 * - Packet length is larger than device MTU and checkMtu is true
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
 		 */
-		virtual int sendPackets(RawPacket* rawPacketsArr, int arrLength);
+		virtual int sendPackets(RawPacket* rawPacketsArr, int arrLength, bool checkMtu = false);
 
 		/**
 		 * Send an array of pointers to Packet objects to the network
 		 * @param[in] packetsArr The array of pointers to Packet objects to send. This method treats all packets as read-only, it doesn't change
 		 * anything in them
 		 * @param[in] arrLength The length of the array
+		 * @param[in] checkMtu Whether to check the size of the packet payload against MTU size. Default value is true, since the packets
+		 * being passed in has already been parsed, so checking the MTU does not incur significant processing overhead.
 		 * @return The number of packets sent successfully. Sending a packet can fail if:
 		 * - Device is not opened. In this case no packets will be sent, return value will be 0
 		 * - Packet length is 0
-		 * - Packet length is larger than device MTU
-		 * - Packet could not be sent due to some error in libpcap/WinPcap
+		 * - Packet length is larger than device MTU and checkMtu is true
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
 		 */
-		virtual int sendPackets(Packet** packetsArr, int arrLength);
+		virtual int sendPackets(Packet** packetsArr, int arrLength, bool checkMtu = true);
 
 		/**
 		 * Send a vector of pointers to RawPacket objects to the network
 		 * @param[in] rawPackets The array of pointers to RawPacket objects to send. This method treats all packets as read-only, it doesn't change
 		 * anything in them
+		 * @param[in] checkMtu Whether to check the size of the packet payload against MTU size. Incurs a parsing overhead.
+		 * Default value is false to avoid performance overhead. Set to true if you don't know whether packets fit the live device's MTU and you can afford the overhead.
 		 * @return The number of packets sent successfully. Sending a packet can fail if:
 		 * - Device is not opened. In this case no packets will be sent, return value will be 0
 		 * - Packet length is 0
-		 * - Packet length is larger than device MTU
-		 * - Packet could not be sent due to some error in libpcap/WinPcap
+		 * - Packet length is larger than device MTU and checkMtu is true
+		 * - Packet could not be sent due to some error in libpcap/WinPcap/Npcap
 		 */
-		virtual int sendPackets(const RawPacketVector& rawPackets);
+		virtual int sendPackets(const RawPacketVector& rawPackets, bool checkMtu = false);
 
 
 		// implement abstract methods
@@ -450,7 +539,13 @@ namespace pcpp
 
 		void close();
 
-		virtual void getStatistics(pcap_stat& stats);
+		/**
+		 * Clones the current device class
+		 * @return Pointer to the copied class
+		 */
+		PcapLiveDevice* clone();
+
+		virtual void getStatistics(IPcapDevice::PcapStats& stats) const;
 
 	protected:
 		pcap_t* doOpen(const DeviceConfiguration& config);

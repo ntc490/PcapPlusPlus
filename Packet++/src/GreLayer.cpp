@@ -2,21 +2,16 @@
 
 #include "GreLayer.h"
 #include "EthLayer.h"
+#include "EthDot3Layer.h"
 #include "IPv4Layer.h"
 #include "IPv6Layer.h"
 #include "PPPoELayer.h"
 #include "VlanLayer.h"
 #include "MplsLayer.h"
 #include "PayloadLayer.h"
+#include "PacketUtils.h"
 #include "Logger.h"
-#include "IpUtils.h"
-#if defined(WIN32) || defined(WINx64) //for using ntohl, ntohs, etc.
-#include <winsock2.h>
-#elif LINUX
-#include <in.h> //for using ntohl, ntohs, etc.
-#elif MAC_OS_X
-#include <arpa/inet.h> //for using ntohl, ntohs, etc.
-#endif
+#include "EndianPortable.h"
 
 // ==============
 // GreLayer class
@@ -46,10 +41,9 @@ uint8_t* GreLayer::getFieldValue(GreField field, bool returnOffsetEvenIfFieldMis
 
 	gre_basic_header* header = (gre_basic_header*)m_Data;
 
-	GreField curField = GreChecksumOrRouting;
-
-	while (curField < 4)
+	for (int curFieldAsInt = static_cast<int>(GreChecksumOrRouting); curFieldAsInt < 4 /* this value is out of scope of GreField enum values */; ++curFieldAsInt)
 	{
+		const GreField curField = static_cast<GreField>(curFieldAsInt);
 		bool curFieldExists = false;
 
 		uint8_t* origPtr = ptr;
@@ -92,14 +86,10 @@ uint8_t* GreLayer::getFieldValue(GreField field, bool returnOffsetEvenIfFieldMis
 		{
 			if (curFieldExists || returnOffsetEvenIfFieldMissing)
 				return origPtr;
-			else
-				return NULL;
-		}
 
-		int curFieldAsInt = (int)curField;
-		curFieldAsInt++;
-		curField = static_cast<GreField>(curFieldAsInt);
-	}
+			return NULL;
+		}
+	} // for
 
 	return NULL;
 }
@@ -112,21 +102,23 @@ void GreLayer::computeCalculateFieldsInner()
 		switch (m_NextLayer->getProtocol())
 		{
 		case IPv4:
-			header->protocol = htons(PCPP_ETHERTYPE_IP);
+			header->protocol = htobe16(PCPP_ETHERTYPE_IP);
 			break;
 		case IPv6:
-			header->protocol = htons(PCPP_ETHERTYPE_IPV6);
+			header->protocol = htobe16(PCPP_ETHERTYPE_IPV6);
 			break;
 		case VLAN:
-			header->protocol = htons(PCPP_ETHERTYPE_VLAN);
+			header->protocol = htobe16(PCPP_ETHERTYPE_VLAN);
 			break;
 		case MPLS:
-			header->protocol = htons(PCPP_ETHERTYPE_MPLS);
+			header->protocol = htobe16(PCPP_ETHERTYPE_MPLS);
 			break;
 		case PPP_PPTP:
-			header->protocol = htons(PCPP_ETHERTYPE_PPP);
+			header->protocol = htobe16(PCPP_ETHERTYPE_PPP);
 			break;
-
+		case Ethernet:
+			header->protocol = htobe16(PCPP_ETHERTYPE_ETHBRIDGE);
+			break;
 		default:
 			break;
 		}
@@ -144,7 +136,7 @@ bool GreLayer::getSequenceNumber(uint32_t& seqNumber) const
 	if (val == NULL)
 		return false;
 
-	seqNumber = ntohl(*val);
+	seqNumber = be32toh(*val);
 	return true;
 }
 
@@ -163,14 +155,14 @@ bool GreLayer::setSequenceNumber(uint32_t seqNumber)
 	if (needToExtendLayer && !extendLayer(offset, sizeof(uint32_t)))
 	{
 		header->sequenceNumBit = 0;
-		LOG_ERROR("Couldn't extend layer to set sequence number");
+		PCPP_LOG_ERROR("Couldn't extend layer to set sequence number");
 		return false;
 	}
 
 	header = (gre_basic_header*)m_Data;
 	header->sequenceNumBit = 1;
 	uint32_t* seqPtr = (uint32_t*)(m_Data + offset);
-	*seqPtr = htonl(seqNumber);
+	*seqPtr = htobe32(seqNumber);
 
 	return true;
 }
@@ -181,7 +173,7 @@ bool GreLayer::unsetSequenceNumber()
 
 	if (header->sequenceNumBit == 0)
 	{
-		LOG_ERROR("Couldn't unset sequence number as it's already unset");
+		PCPP_LOG_ERROR("Couldn't unset sequence number as it's already unset");
 		return false;
 	}
 
@@ -190,7 +182,7 @@ bool GreLayer::unsetSequenceNumber()
 	int offset = offsetPtr - m_Data;
 	if (!shortenLayer(offset, sizeof(uint32_t)))
 	{
-		LOG_ERROR("Couldn't shorted layer to unset sequence number");
+		PCPP_LOG_ERROR("Couldn't shorted layer to unset sequence number");
 		return false;
 	}
 
@@ -206,29 +198,50 @@ void GreLayer::parseNextLayer()
 		return;
 
 	gre_basic_header* header = (gre_basic_header*)m_Data;
-	switch (ntohs(header->protocol))
+	uint8_t* payload = m_Data + headerLen;
+	size_t payloadLen = m_DataLen - headerLen;
+
+	switch (be16toh(header->protocol))
 	{
 	case PCPP_ETHERTYPE_IP:
-		m_NextLayer = new IPv4Layer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = IPv4Layer::isDataValid(payload, payloadLen)
+			? static_cast<Layer*>(new IPv4Layer(payload, payloadLen, this, m_Packet))
+			: static_cast<Layer*>(new PayloadLayer(payload, payloadLen, this, m_Packet));
 		break;
 	case PCPP_ETHERTYPE_IPV6:
-		m_NextLayer = new IPv6Layer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = IPv6Layer::isDataValid(payload, payloadLen)
+			? static_cast<Layer*>(new IPv6Layer(payload, payloadLen, this, m_Packet))
+			: static_cast<Layer*>(new PayloadLayer(payload, payloadLen, this, m_Packet));
 		break;
 	case PCPP_ETHERTYPE_VLAN:
-		m_NextLayer = new VlanLayer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = new VlanLayer(payload, payloadLen, this, m_Packet);
 		break;
 	case PCPP_ETHERTYPE_MPLS:
-		m_NextLayer = new MplsLayer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = new MplsLayer(payload, payloadLen, this, m_Packet);
 		break;
 	case PCPP_ETHERTYPE_PPP:
-		m_NextLayer = new PPP_PPTPLayer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = new PPP_PPTPLayer(payload, payloadLen, this, m_Packet);
+		break;
+	case PCPP_ETHERTYPE_ETHBRIDGE:
+		if (EthLayer::isDataValid(payload, payloadLen))
+		{
+			m_NextLayer = new EthLayer(payload, payloadLen, this, m_Packet);
+		}
+		else if (EthDot3Layer::isDataValid(payload, payloadLen))
+		{
+			m_NextLayer = new EthDot3Layer(payload, payloadLen, this, m_Packet);
+		}
+		else
+		{
+			m_NextLayer = new PayloadLayer(payload, payloadLen, this, m_Packet);
+		}
 		break;
 	default:
-		m_NextLayer = new PayloadLayer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = new PayloadLayer(payload, payloadLen, this, m_Packet);
 	}
 }
 
-size_t GreLayer::getHeaderLen()
+size_t GreLayer::getHeaderLen() const
 {
 	size_t result = sizeof(gre_basic_header);
 
@@ -255,9 +268,10 @@ size_t GreLayer::getHeaderLen()
 
 GREv0Layer::GREv0Layer()
 {
-	m_DataLen = sizeof(gre_basic_header);
-	m_Data = new uint8_t[m_DataLen];
-	memset(m_Data, 0, m_DataLen);
+	const size_t headerLen = sizeof(gre_basic_header);
+	m_DataLen = headerLen;
+	m_Data = new uint8_t[headerLen];
+	memset(m_Data, 0, headerLen);
 	m_Protocol = GREv0;
 }
 
@@ -270,7 +284,7 @@ bool GREv0Layer::getChecksum(uint16_t& checksum)
 	if (val == NULL)
 		return false;
 
-	checksum = ntohs(*val);
+	checksum = be16toh(*val);
 	return true;
 }
 
@@ -288,12 +302,12 @@ bool GREv0Layer::setChecksum(uint16_t checksum)
 	// extend layer in 4 bytes to keep 4-byte alignment
 	if (needToExtendLayer && !extendLayer(offset, sizeof(uint32_t)))
 	{
-		LOG_ERROR("Couldn't extend layer to set checksum");
+		PCPP_LOG_ERROR("Couldn't extend layer to set checksum");
 		return false;
 	}
 
 	uint16_t* checksumPtr = (uint16_t*)(m_Data + offset);
-	*checksumPtr = htons(checksum);
+	*checksumPtr = htobe16(checksum);
 
 	// if layer was extended in 4 bytes, make sure the offset field stays 0
 	if (needToExtendLayer)
@@ -314,7 +328,7 @@ bool GREv0Layer::unsetChecksum()
 
 	if (header->checksumBit == 0)
 	{
-		LOG_ERROR("Couldn't unset checksum as it's already unset");
+		PCPP_LOG_ERROR("Couldn't unset checksum as it's already unset");
 		return false;
 	}
 
@@ -325,7 +339,7 @@ bool GREv0Layer::unsetChecksum()
 	int offset = offsetPtr - m_Data;
 	if (needToShortenLayer && !shortenLayer(offset, sizeof(uint32_t)))
 	{
-		LOG_ERROR("Couldn't extend layer to unset checksum");
+		PCPP_LOG_ERROR("Couldn't extend layer to unset checksum");
 		return false;
 	}
 
@@ -341,7 +355,7 @@ bool GREv0Layer::unsetChecksum()
 	return true;
 }
 
-bool GREv0Layer::getOffset(uint16_t& offset)
+bool GREv0Layer::getOffset(uint16_t& offset) const
 {
 	if (getGreHeader()->routingBit == 0)
 		return false;
@@ -350,11 +364,11 @@ bool GREv0Layer::getOffset(uint16_t& offset)
 	if (val == NULL)
 		return false;
 
-	offset = ntohs(*(val+2));
+	offset = be16toh(*(val+2));
 	return true;
 }
 
-bool GREv0Layer::getKey(uint32_t& key)
+bool GREv0Layer::getKey(uint32_t& key) const
 {
 	if (getGreHeader()->keyBit == 0)
 		return false;
@@ -363,7 +377,7 @@ bool GREv0Layer::getKey(uint32_t& key)
 	if (val == NULL)
 		return false;
 
-	key = ntohl(*val);
+	key = be32toh(*val);
 	return true;
 }
 
@@ -382,14 +396,14 @@ bool GREv0Layer::setKey(uint32_t key)
 	if (needToExtendLayer && !extendLayer(offset, sizeof(uint32_t)))
 	{
 		header->keyBit = 0;
-		LOG_ERROR("Couldn't extend layer to set key");
+		PCPP_LOG_ERROR("Couldn't extend layer to set key");
 		return false;
 	}
 
 	header = getGreHeader();
 	header->keyBit = 1;
 	uint32_t* keyPtr = (uint32_t*)(m_Data + offset);
-	*keyPtr = htonl(key);
+	*keyPtr = htobe32(key);
 
 	return true;
 }
@@ -400,7 +414,7 @@ bool GREv0Layer::unsetKey()
 
 	if (header->keyBit == 0)
 	{
-		LOG_ERROR("Couldn't unset key as it's already unset");
+		PCPP_LOG_ERROR("Couldn't unset key as it's already unset");
 		return false;
 	}
 
@@ -409,7 +423,7 @@ bool GREv0Layer::unsetKey()
 	int offset = offsetPtr - m_Data;
 	if (!shortenLayer(offset, sizeof(uint32_t)))
 	{
-		LOG_ERROR("Couldn't shorted layer to unset key");
+		PCPP_LOG_ERROR("Couldn't shorted layer to unset key");
 		return false;
 	}
 
@@ -431,12 +445,12 @@ void GREv0Layer::computeCalculateFields()
 	ScalarBuffer<uint16_t> buffer;
 	buffer.buffer = (uint16_t*)m_Data;
 	buffer.len = m_DataLen;
-	size_t checksum = compute_checksum(&buffer, 1);
+	size_t checksum = computeChecksum(&buffer, 1);
 
 	setChecksum(checksum);
 }
 
-std::string GREv0Layer::toString()
+std::string GREv0Layer::toString() const
 {
 	return "GRE Layer, version 0";
 }
@@ -448,18 +462,19 @@ std::string GREv0Layer::toString()
 
 GREv1Layer::GREv1Layer(uint16_t callID)
 {
-	m_DataLen = sizeof(gre1_header);
-	m_Data = new uint8_t[m_DataLen];
-	memset(m_Data, 0, m_DataLen);
+	const size_t headerLen = sizeof(gre1_header);
+	m_DataLen = headerLen;
+	m_Data = new uint8_t[headerLen];
+	memset(m_Data, 0, headerLen);
 	m_Protocol = GREv1;
 
 	gre1_header* header = getGreHeader();
 	header->keyBit = 1;
 	header->version = 1;
-	header->callID = htons(callID);
+	header->callID = htobe16(callID);
 }
 
-bool GREv1Layer::getAcknowledgmentNum(uint32_t& ackNum)
+bool GREv1Layer::getAcknowledgmentNum(uint32_t& ackNum) const
 {
 	if (getGreHeader()->ackSequenceNumBit == 0)
 		return false;
@@ -468,7 +483,7 @@ bool GREv1Layer::getAcknowledgmentNum(uint32_t& ackNum)
 	if (val == NULL)
 		return false;
 
-	ackNum = ntohl(*val);
+	ackNum = be32toh(*val);
 	return true;
 }
 
@@ -485,14 +500,14 @@ bool GREv1Layer::setAcknowledgmentNum(uint32_t ackNum)
 	int offset = offsetPtr - m_Data;
 	if (needToExtendLayer && !extendLayer(offset, sizeof(uint32_t)))
 	{
-		LOG_ERROR("Couldn't extend layer to set ack number");
+		PCPP_LOG_ERROR("Couldn't extend layer to set ack number");
 		return false;
 	}
 
 	header = getGreHeader();
 	header->ackSequenceNumBit = 1;
 	uint32_t* ackPtr = (uint32_t*)(m_Data + offset);
-	*ackPtr = htonl(ackNum);
+	*ackPtr = htobe32(ackNum);
 	return true;
 }
 
@@ -502,7 +517,7 @@ bool GREv1Layer::unsetAcknowledgmentNum()
 
 	if (header->ackSequenceNumBit == 0)
 	{
-		LOG_ERROR("Couldn't unset ack number as it's already unset");
+		PCPP_LOG_ERROR("Couldn't unset ack number as it's already unset");
 		return false;
 	}
 
@@ -511,7 +526,7 @@ bool GREv1Layer::unsetAcknowledgmentNum()
 	int offset = offsetPtr - m_Data;
 	if (!shortenLayer(offset, sizeof(uint32_t)))
 	{
-		LOG_ERROR("Couldn't shorted layer to unset ack number");
+		PCPP_LOG_ERROR("Couldn't shorted layer to unset ack number");
 		return false;
 	}
 
@@ -524,10 +539,10 @@ void GREv1Layer::computeCalculateFields()
 {
 	computeCalculateFieldsInner();
 
-	getGreHeader()->payloadLength = htons(m_DataLen - getHeaderLen());
+	getGreHeader()->payloadLength = htobe16(m_DataLen - getHeaderLen());
 }
 
-std::string GREv1Layer::toString()
+std::string GREv1Layer::toString() const
 {
 	return "GRE Layer, version 1";
 }
@@ -540,9 +555,10 @@ std::string GREv1Layer::toString()
 
 PPP_PPTPLayer::PPP_PPTPLayer(uint8_t address, uint8_t control)
 {
-	m_DataLen = sizeof(ppp_pptp_header);
-	m_Data = new uint8_t[m_DataLen];
-	memset(m_Data, 0, m_DataLen);
+	const size_t headerLen = sizeof(ppp_pptp_header);
+	m_DataLen = headerLen;
+	m_Data = new uint8_t[headerLen];
+	memset(m_Data, 0, headerLen);
 	m_Protocol = PPP_PPTP;
 
 	ppp_pptp_header* header = getPPP_PPTPHeader();
@@ -557,16 +573,23 @@ void PPP_PPTPLayer::parseNextLayer()
 	if (m_DataLen <= headerLen)
 		return;
 
-	switch (ntohs(getPPP_PPTPHeader()->protocol))
+	uint8_t* payload = m_Data + headerLen;
+	size_t payloadLen = m_DataLen - headerLen;
+
+	switch (be16toh(getPPP_PPTPHeader()->protocol))
 	{
 	case PCPP_PPP_IP:
-		m_NextLayer = new IPv4Layer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = IPv4Layer::isDataValid(payload, payloadLen)
+			? static_cast<Layer*>(new IPv4Layer(payload, payloadLen, this, m_Packet))
+			: static_cast<Layer*>(new PayloadLayer(payload, payloadLen, this, m_Packet));
 		break;
 	case PCPP_PPP_IPV6:
-		m_NextLayer = new IPv6Layer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = IPv6Layer::isDataValid(payload, payloadLen)
+			? static_cast<Layer*>(new IPv6Layer(payload, payloadLen, this, m_Packet))
+			: static_cast<Layer*>(new PayloadLayer(payload, payloadLen, this, m_Packet));
 		break;
 	default:
-		m_NextLayer = new PayloadLayer(m_Data + headerLen, m_DataLen - headerLen, this, m_Packet);
+		m_NextLayer = new PayloadLayer(payload, payloadLen, this, m_Packet);
 		break;
 	}
 }
@@ -579,10 +602,10 @@ void PPP_PPTPLayer::computeCalculateFields()
 		switch (m_NextLayer->getProtocol())
 		{
 		case IPv4:
-			header->protocol = htons(PCPP_PPP_IP);
+			header->protocol = htobe16(PCPP_PPP_IP);
 			break;
 		case IPv6:
-			header->protocol = htons(PCPP_PPP_IPV6);
+			header->protocol = htobe16(PCPP_PPP_IPV6);
 			break;
 		default:
 			break;

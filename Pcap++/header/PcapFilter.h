@@ -3,9 +3,14 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 #include "ProtocolType.h"
 #include <stdint.h>
 #include "ArpLayer.h"
+#include "RawPacket.h"
+
+//Forward Declaration - used in GeneralFilter
+struct bpf_program;
 
 /**
  * @file
@@ -29,6 +34,8 @@
 */
 namespace pcpp
 {
+	//Forward Declaration - used in GeneralFilter
+	class RawPacket;
 
 	/**
 	 * An enum that contains direction (source or destination)
@@ -63,6 +70,63 @@ namespace pcpp
 		LESS_OR_EQUAL
 	} FilterOperator;
 
+	/**
+	 * @class BpfFilterWrapper
+	 * A wrapper class for BPF filtering. Enables setting a BPF filter and matching it against a packet
+	 */
+	class BpfFilterWrapper
+	{
+	private:
+		std::string m_FilterStr;
+		LinkLayerType m_LinkType;
+		bpf_program* m_Program;
+
+		void freeProgram();
+
+	public:
+
+		/**
+		 * A c'tor for this class
+		 */
+		BpfFilterWrapper();
+
+		/**
+		 * A d'tor for this class. Makes sure to clear the bpf_program object if was previously set.
+		 */
+		~BpfFilterWrapper();
+
+		/**
+		 * Set a filter. This method receives a filter in BPF syntax (https://biot.com/capstats/bpf.html) and an optional link type,
+		 * compiles them, and if compilation is successful it stores the filter.
+		 * @param[in] filter A filter in BPF syntax
+		 * @param[in] linkType An optional parameter to set the filter's link type. The default is LINKTYPE_ETHERNET
+		 * @return True if compilation is successful and filter is stored in side this object, false otherwise
+		 */
+		bool setFilter(const std::string& filter, LinkLayerType linkType = LINKTYPE_ETHERNET);
+
+		/**
+		 * Match a packet with the filter stored in this object. If the filter is empty the method returns "true".
+		 * If the link type of the raw packet is different than the one set in setFilter(), the filter will be
+		 * re-compiled and stored in the object.
+		 * @param[in] rawPacket A pointer to a raw packet which the filter will be matched against
+		 * @return True if the filter matches (or if it's empty). False if the packet doesn't match or if the filter
+		 * could not be compiled
+		 */
+		bool matchPacketWithFilter(const RawPacket* rawPacket);
+
+		/**
+		 * Match a packet data with the filter stored in this object. If the filter is empty the method returns "true".
+		 * If the link type provided is different than the one set in setFilter(), the filter will be re-compiled
+		 * and stored in the object.
+		 * @param[in] packetData A byte stream containing the packet data
+		 * @param[in] packetDataLength The length in [bytes] of the byte stream
+		 * @param[in] packetTimestamp The packet timestamp
+		 * @param[in] linkType The packet link type
+		 * @return True if the filter matches (or if it's empty). False if the packet doesn't match or if the filter
+		 * could not be compiled
+		 */
+		bool matchPacketWithFilter(const uint8_t* packetData, uint32_t packetDataLength, timespec packetTimestamp, uint16_t linkType);
+	};
 
 	/**
 	 * @class GeneralFilter
@@ -71,17 +135,59 @@ namespace pcpp
 	 */
 	class GeneralFilter
 	{
+	protected:
+		BpfFilterWrapper m_BpfWrapper;
+
 	public:
 		/**
 		 * A method that parses the class instance into BPF string format
 		 * @param[out] result An empty string that the parsing will be written into. If the string isn't empty, its content will be overridden
+		 * @return No return value
 		 */
 		virtual void parseToString(std::string& result) = 0;
 
 		/**
-		 * Virtual destructor, does nothing for this class
+		* Match a raw packet with a given BPF filter.
+		* @param[in] rawPacket A pointer to the raw packet to match the BPF filter with
+		* @return True if a raw packet matches the BPF filter or false otherwise
+		*/
+		bool matchPacketWithFilter(RawPacket* rawPacket);
+
+		GeneralFilter() {}
+
+		/**
+		 * Virtual destructor, frees the bpf program
 		 */
-		virtual ~GeneralFilter();
+		virtual ~GeneralFilter() {}
+	};
+
+	/**
+	 * @class BPFStringFilter
+	 * This class can be loaded with a BPF filter string and then can be used to verify the string is valid.<BR>
+	 */
+	class BPFStringFilter : public GeneralFilter
+	{
+	private:
+		const std::string m_FilterStr;
+
+	public:
+		BPFStringFilter(const std::string& filterStr) : m_FilterStr(filterStr) {}
+
+		virtual ~BPFStringFilter() {}
+
+		/**
+		 * A method that parses the class instance into BPF string format
+		 * @param[out] result An empty string that the parsing will be written into. If the string isn't empty, its content will be overridden
+		 * If the filter is not valid the result will be an empty string
+		 * @return No return value
+		 */
+		virtual void parseToString(std::string& result);
+
+		/**
+		* Verify the filter is valid
+		* @return True if the filter is valid or false otherwise
+		*/
+		bool verifyFilter();
 	};
 
 
@@ -96,7 +202,7 @@ namespace pcpp
 		Direction m_Dir;
 	protected:
 		void parseDirection(std::string& directionAsString);
-		inline Direction getDir() { return m_Dir; }
+		Direction getDir() const { return m_Dir; }
 		IFilterWithDirection(Direction dir) { m_Dir = dir; }
 	public:
 		/**
@@ -119,7 +225,7 @@ namespace pcpp
 		FilterOperator m_Operator;
 	protected:
 		std::string parseOperator();
-		inline FilterOperator getOperator() { return m_Operator; }
+		FilterOperator getOperator() const { return m_Operator; }
 		IFilterWithOperator(FilterOperator op) { m_Operator = op; }
 	public:
 		/**
@@ -143,8 +249,8 @@ namespace pcpp
 		std::string m_Address;
 		std::string m_IPv4Mask;
 		int m_Len;
-		void convertToIPAddressWithMask(std::string& ipAddrmodified, std::string& mask);
-		void convertToIPAddressWithLen(std::string& ipAddrmodified, int& len);
+		void convertToIPAddressWithMask(std::string& ipAddrmodified, std::string& mask) const;
+		void convertToIPAddressWithLen(std::string& ipAddrmodified) const;
 	public:
 		/**
 		 * The basic constructor that creates the filter from an IPv4 address and direction (source or destination)
@@ -488,7 +594,7 @@ namespace pcpp
 	/**
 	 * @class ProtoFilter
 	 * A class for filtering traffic by protocol. Notice not all protocols are supported, only the following are supported:
-	 * ::TCP, ::UDP, ::ICMP, ::VLAN, ::IPv4, ::IPv6, ::ARP, ::Ethernet, ::GRE (distinguish between ::GREv0 and ::GREv1 is not supported), 
+	 * ::TCP, ::UDP, ::ICMP, ::VLAN, ::IPv4, ::IPv6, ::ARP, ::Ethernet, ::GRE (distinguish between ::GREv0 and ::GREv1 is not supported),
 	 * ::IGMP (distinguish between ::IGMPv1, ::IGMPv2 and ::IGMPv3 is not supported). <BR>
 	 * For deeper understanding of the filter concept please refer to PcapFilter.h
 	 */
@@ -678,18 +784,18 @@ namespace pcpp
 		/**
 		 * A constructor that get the UDP length and operator and creates the filter. For example: "filter all UDP packets with length
 		 * greater or equal to 500"
-		 * @param[in] legnth The length value that will be used in the filter
+		 * @param[in] length The length value that will be used in the filter
 		 * @param[in] op The operator to use (e.g "equal", "greater than", etc.)
 		 */
-		UdpLengthFilter(uint16_t legnth, FilterOperator op) : IFilterWithOperator(op), m_Length(legnth) {}
+		UdpLengthFilter(uint16_t length, FilterOperator op) : IFilterWithOperator(op), m_Length(length) {}
 
 		void parseToString(std::string& result);
 
 		/**
-		 * Set legnth value
-		 * @param[in] legnth The legnth value that will be used in the filter
+		 * Set length value
+		 * @param[in] length The length value that will be used in the filter
 		 */
-		void setLength(uint16_t legnth) { m_Length = legnth; }
+		void setLength(uint16_t length) { m_Length = length; }
 	};
 
 } // namespace pcpp

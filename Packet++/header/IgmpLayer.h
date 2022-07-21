@@ -94,12 +94,12 @@ struct igmpv3_group_record
 	/**
 	 * @return The multicast address in igmpv3_group_record#multicastAddress as IPv4Address instance
 	 */
-	IPv4Address getMulticastAddress();
+	IPv4Address getMulticastAddress() const { return multicastAddress; }
 
 	/**
 	 * @return The number of source addresses in this group record
 	 */
-	uint16_t getSourceAdressCount();
+	uint16_t getSourceAddressCount() const;
 
 	/**
 	 * Get the source address at a certain index
@@ -107,12 +107,12 @@ struct igmpv3_group_record
 	 * @return The source address in the requested index. If index is negative or higher than the number of source addresses in this
 	 * group record the value if IPv4Address#Zero is returned
 	 */
-	IPv4Address getSoruceAddressAtIndex(int index);
+	IPv4Address getSourceAddressAtIndex(int index) const;
 
 	/**
 	 * @return The total size in bytes of the group record
 	 */
-	size_t getRecordLen();
+	size_t getRecordLen() const;
 };
 
 
@@ -162,13 +162,13 @@ class IgmpLayer : public Layer
 {
 protected:
 
-	IgmpLayer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet, ProtocolType igmpVer) : Layer(data, dataLen, NULL, packet) { m_Protocol = igmpVer; }
+	IgmpLayer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet, ProtocolType igmpVer) : Layer(data, dataLen, prevLayer, packet) { m_Protocol = igmpVer; }
 
 	IgmpLayer(IgmpType type, const IPv4Address& groupAddr, uint8_t maxResponseTime, ProtocolType igmpVer);
 
 	uint16_t calculateChecksum();
 
-	size_t getHeaderSizeByVerAndType(ProtocolType igmpVer, IgmpType igmpType);
+	size_t getHeaderSizeByVerAndType(ProtocolType igmpVer, IgmpType igmpType) const;
 public:
 
 	virtual ~IgmpLayer() {}
@@ -177,12 +177,12 @@ public:
 	 * Get a pointer to the raw IGMPv1/IGMPv2 header. Notice this points directly to the data, so every change will change the actual packet data
 	 * @return A pointer to the @ref igmp_header
 	 */
-	inline igmp_header* getIgmpHeader() const { return (igmp_header*)m_Data; }
+	igmp_header* getIgmpHeader() const { return (igmp_header*)m_Data; }
 
 	/**
 	 * @return The IPv4 multicast address stored igmp_header#groupAddress
 	 */
-	inline IPv4Address getGroupAddress() { return IPv4Address(getIgmpHeader()->groupAddress); }
+	IPv4Address getGroupAddress() const { return getIgmpHeader()->groupAddress; }
 
 	/**
 	 * Set the IPv4 multicast address
@@ -194,7 +194,7 @@ public:
 	 * @return IGMP type set in igmp_header#type as ::IgmpType enum. Notice that if igmp_header#type contains a value
 	 * that doesn't appear in the ::IgmpType enum, ::IgmpType_Unknown will be returned
 	 */
-	IgmpType getType();
+	IgmpType getType() const;
 
 	/**
 	 * Set IGMP type (will be written to igmp_header#type field)
@@ -223,9 +223,9 @@ public:
 	/**
 	 * @return Size of IGMP header = 8B
 	 */
-	inline size_t getHeaderLen() { return sizeof(igmp_header); }
+	size_t getHeaderLen() const { return sizeof(igmp_header); }
 
-	std::string toString();
+	std::string toString() const;
 
 	OsiModelLayer getOsiModelLayer() const { return OsiModelNetworkLayer; }
 };
@@ -244,7 +244,8 @@ public:
 	 * @param[in] prevLayer A pointer to the previous layer
 	 * @param[in] packet A pointer to the Packet instance where layer will be stored in
 	 */
-	IgmpV1Layer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet);
+	IgmpV1Layer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet)
+		: IgmpLayer(data, dataLen, prevLayer, packet, IGMPv1) {}
 
 	/**
 	 * A constructor that allocates a new IGMPv1 header
@@ -252,7 +253,8 @@ public:
 	 * @param[in] groupAddr The multicast address to set. This is an optional parameter and has a default value of IPv4Address#Zero
 	 * if not provided
 	 */
-	IgmpV1Layer(IgmpType type, const IPv4Address& groupAddr = IPv4Address::Zero);
+	IgmpV1Layer(IgmpType type, const IPv4Address& groupAddr = IPv4Address())
+		: IgmpLayer(type, groupAddr, 0, IGMPv1) {}
 
 	/**
 	 * A destructor for this layer (does nothing)
@@ -283,15 +285,17 @@ public:
 	 * @param[in] prevLayer A pointer to the previous layer
 	 * @param[in] packet A pointer to the Packet instance where layer will be stored in
 	 */
-	IgmpV2Layer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet);
+	IgmpV2Layer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet)
+		: IgmpLayer(data, dataLen, prevLayer, packet, IGMPv2) {}
 
 	/**
 	 * A constructor that allocates a new IGMPv2 header
 	 * @param[in] type The message type to set
-	 * @param[in] groupAddr The multicast address to set. This is an optional parameter and has a default value of IPv4Address#Zero
+	 * @param[in] groupAddr The multicast address to set. This is an optional parameter and has a default value of unspecified/zero IPv4 address
 	 * @param[in] maxResponseTime The max response time to set. This is an optional parameter and has a default value of 0 if not provided
 	 */
-	IgmpV2Layer(IgmpType type, const IPv4Address& groupAddr = IPv4Address::Zero, uint8_t maxResponseTime = 0);
+	IgmpV2Layer(IgmpType type, const IPv4Address& groupAddr = IPv4Address(), uint8_t maxResponseTime = 0)
+		: IgmpLayer(type, groupAddr, maxResponseTime, IGMPv2) {}
 
 	/**
 	 * A destructor for this layer (does nothing)
@@ -326,32 +330,32 @@ public:
 
 	/**
 	 * A constructor that allocates a new IGMPv3 membership query
-	 * @param[in] multicastAddr The multicast address to set. This is an optional parameter and has a default value of IPv4Address#Zero
+	 * @param[in] multicastAddr The multicast address to set. This is an optional parameter and has a default value of unspecified/zero IPv4 address
 	 * if not provided
 	 * @param[in] maxResponseTime The max response time to set. This is an optional parameter and has a default value of 0 if not provided
 	 * @param[in] s_qrv A 1-byte value representing the value in Suppress Router-side Processing Flag + Querier's Robustness Variable
 	 * (igmpv3_query_header#s_qrv field). This is an optional parameter and has a default value of 0 if not provided
 	 */
-	IgmpV3QueryLayer(const IPv4Address& multicastAddr = IPv4Address::Zero, uint8_t maxResponseTime = 0, uint8_t s_qrv = 0);
+	IgmpV3QueryLayer(const IPv4Address& multicastAddr = IPv4Address(), uint8_t maxResponseTime = 0, uint8_t s_qrv = 0);
 
 	/**
 	 * Get a pointer to the raw IGMPv3 membership query header. Notice this points directly to the data, so every change will change the
 	 * actual packet data
 	 * @return A pointer to the @ref igmpv3_query_header
 	 */
-	inline igmpv3_query_header* getIgmpV3QueryHeader() { return (igmpv3_query_header*)m_Data; }
+	igmpv3_query_header* getIgmpV3QueryHeader() const { return (igmpv3_query_header*)m_Data; }
 
 	/**
 	 * @return The number of source addresses in this message (as extracted from the igmpv3_query_header#numOfSources field)
 	 */
-	uint16_t getSourceAddressCount();
+	uint16_t getSourceAddressCount() const;
 
 	/**
 	 * Get the IPV4 source address in a certain index
 	 * @param[in] index The requested index of the source address
 	 * @return The IPv4 source address, or IPv4Address#Zero if index is out of bounds (of the message or of the layer)
 	 */
-	IPv4Address getSourceAddressAtIndex(int index);
+	IPv4Address getSourceAddressAtIndex(int index) const;
 
 	/**
 	 * Add a new source address at the end of the source address list. The igmpv3_query_header#numOfSources field will be incremented accordingly
@@ -395,7 +399,7 @@ public:
 	/**
 	 * @return The message size in bytes which include the size of the basic header + the size of the source address list
 	 */
-	size_t getHeaderLen();
+	size_t getHeaderLen() const;
 };
 
 
@@ -416,30 +420,31 @@ public:
 	 * @param[in] prevLayer A pointer to the previous layer
 	 * @param[in] packet A pointer to the Packet instance where layer will be stored in
 	 */
-	IgmpV3ReportLayer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet);
+	IgmpV3ReportLayer(uint8_t* data, size_t dataLen, Layer* prevLayer, Packet* packet)
+		: IgmpLayer(data, dataLen, prevLayer, packet, IGMPv3) {}
 
 	/**
 	 * A constructor that allocates a new IGMPv3 membership report with 0 group addresses
 	 */
-	IgmpV3ReportLayer();
+	IgmpV3ReportLayer() : IgmpLayer(IgmpType_MembershipReportV3, IPv4Address(), 0, IGMPv3) {}
 
 	/**
 	 * Get a pointer to the raw IGMPv3 membership report header. Notice this points directly to the data, so every change will change the
 	 * actual packet data
 	 * @return A pointer to the @ref igmpv3_report_header
 	 */
-	inline igmpv3_report_header* getReportHeader() const { return (igmpv3_report_header*)m_Data; }
+	igmpv3_report_header* getReportHeader() const { return (igmpv3_report_header*)m_Data; }
 
 	/**
 	 * @return The number of group records in this message (as extracted from the igmpv3_report_header#numOfGroupRecords field)
 	 */
-	uint16_t getGroupRecordCount();
+	uint16_t getGroupRecordCount() const;
 
 	/**
 	 * @return A pointer to the first group record or NULL if no group records exist. Notice the return value is a pointer to the real data,
 	 * so changes in the return value will affect the packet data
 	 */
-	igmpv3_group_record* getFirstGroupRecord();
+	igmpv3_group_record* getFirstGroupRecord() const;
 
 	/**
 	 * Get the group record that comes next to a given group record. If "groupRecord" is NULL then NULL will be returned.
@@ -449,7 +454,7 @@ public:
 	 * @param[in] groupRecord The group record to start searching from
 	 * @return The next group record or NULL if "groupRecord" is NULL, last or out of layer bounds
 	 */
-	igmpv3_group_record* getNextGroupRecord(igmpv3_group_record* groupRecord);
+	igmpv3_group_record* getNextGroupRecord(igmpv3_group_record* groupRecord) const;
 
 	/**
 	 * Add a new group record at a the end of the group record list. The igmpv3_report_header#numOfGroupRecords field will be
@@ -501,7 +506,7 @@ public:
 	/**
 	 * @return The message size in bytes which include the size of the basic header + the size of the group record list
 	 */
-	size_t getHeaderLen();
+	size_t getHeaderLen() const { return m_DataLen; }
 };
 
 }

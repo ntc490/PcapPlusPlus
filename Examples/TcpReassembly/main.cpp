@@ -32,22 +32,20 @@
 #include "TcpReassembly.h"
 #include "PcapLiveDeviceList.h"
 #include "PcapFileDevice.h"
-#include "PlatformSpecificUtils.h"
 #include "SystemUtils.h"
 #include "PcapPlusPlusVersion.h"
 #include "LRUList.h"
 #include <getopt.h>
 
-using namespace pcpp;
 
-#define EXIT_WITH_ERROR(reason, ...) do { \
-	printf("\nError: " reason "\n\n", ## __VA_ARGS__); \
+#define EXIT_WITH_ERROR(reason) do { \
 	printUsage(); \
+	std::cout << std::endl << "ERROR: " << reason << std::endl << std::endl; \
 	exit(1); \
 	} while(0)
 
 
-#if defined(WIN32) || defined(WINx64)
+#if defined(_WIN32)
 #define SEPARATOR '\\'
 #else
 #define SEPARATOR '/'
@@ -71,7 +69,7 @@ static struct option TcpAssemblyOptions[] =
 	{"max-file-desc", required_argument, 0, 'f'},
 	{"help", no_argument, 0, 'h'},
 	{"version", no_argument, 0, 'v'},
-    {0, 0, 0, 0}
+	{0, 0, 0, 0}
 };
 
 
@@ -85,11 +83,11 @@ private:
 	/**
 	 * A private c'tor (as this is a singleton)
 	 */
-	GlobalConfig() { writeMetadata = false; outputDir = ""; writeToConsole = false; separateSides = false; maxOpenFiles = DEFAULT_MAX_NUMBER_OF_CONCURRENT_OPEN_FILES; m_RecentConnsWithActivity = NULL; }
+	GlobalConfig() { writeMetadata = false; writeToConsole = false; separateSides = false; maxOpenFiles = DEFAULT_MAX_NUMBER_OF_CONCURRENT_OPEN_FILES; m_RecentConnsWithActivity = NULL; }
 
 	// A least-recently-used (LRU) list of all connections seen so far. Each connection is represented by its flow key. This LRU list is used to decide which connection was seen least
 	// recently in case we reached max number of open file descriptors and we need to decide which files to close
-	LRUList<uint32_t>* m_RecentConnsWithActivity;
+	pcpp::LRUList<uint32_t>* m_RecentConnsWithActivity;
 
 public:
 
@@ -113,16 +111,16 @@ public:
 	 * A method getting connection parameters as input and returns a filename and file path as output.
 	 * The filename is constructed by the IPs (src and dst) and the TCP ports (src and dst)
 	 */
-	std::string getFileName(ConnectionData connData, int side, bool separareSides)
+	std::string getFileName(pcpp::ConnectionData connData, int side, bool separareSides)
 	{
 		std::stringstream stream;
 
 		// if user chooses to write to a directory other than the current directory - add the dir path to the return value
-		if (outputDir != "")
+		if (!outputDir.empty())
 			stream << outputDir << SEPARATOR;
 
-		std::string sourceIP = connData.srcIP->toString();
-		std::string destIP = connData.dstIP->toString();
+		std::string sourceIP = connData.srcIP.toString();
+		std::string destIP = connData.dstIP.toString();
 
 		// for IPv6 addresses, replace ':' with '_'
 		std::replace(sourceIP.begin(), sourceIP.end(), ':', '_');
@@ -130,9 +128,9 @@ public:
 
 		// side == 0 means data is sent from client->server
 		if (side <= 0 || separareSides == false)
-			stream << sourceIP << "." << connData.srcPort << "-" << destIP << "." << connData.dstPort;
+			stream << sourceIP << '.' << connData.srcPort << '-' << destIP << '.' << connData.dstPort;
 		else // side == 1 means data is sent from server->client
-			stream << destIP << "." << connData.dstPort << "-" << sourceIP << "." << connData.srcPort;
+			stream << destIP << '.' << connData.dstPort << '-' << sourceIP << '.' << connData.srcPort;
 
 		// return the file path
 		return stream.str();
@@ -145,7 +143,7 @@ public:
 	 */
 	std::ostream* openFileStream(std::string fileName, bool reopen)
 	{
-		// if the user chooses to write only to consoe, don't open anything and return std::cout
+		// if the user chooses to write only to console, don't open anything and return std::cout
 		if (writeToConsole)
 			return &std::cout;
 
@@ -178,13 +176,13 @@ public:
 	/**
 	 * Return a pointer to the least-recently-used (LRU) list of connections
 	 */
-	LRUList<uint32_t>* getRecentConnsWithActivity()
+	pcpp::LRUList<uint32_t>* getRecentConnsWithActivity()
 	{
-		// his is a lazy implementation - the instance isn't created until the user requests it for the first time.
+		// This is a lazy implementation - the instance isn't created until the user requests it for the first time.
 		// the side of the LRU list is determined by the max number of allowed open files at any point in time. Default is DEFAULT_MAX_NUMBER_OF_CONCURRENT_OPEN_FILES
 		// but the user can choose another number
 		if (m_RecentConnsWithActivity == NULL)
-			m_RecentConnsWithActivity = new LRUList<uint32_t>(maxOpenFiles);
+			m_RecentConnsWithActivity = new pcpp::LRUList<uint32_t>(maxOpenFiles);
 
 		// return the pointer
 		return m_RecentConnsWithActivity;
@@ -194,10 +192,18 @@ public:
 	/**
 	 * The singleton implementation of this class
 	 */
-	static inline GlobalConfig& getInstance()
+	static GlobalConfig& getInstance()
 	{
 		static GlobalConfig instance;
 		return instance;
+	}
+
+	/**
+	 * d'tor
+	 */
+	~GlobalConfig()
+	{
+		delete m_RecentConnsWithActivity;
 	}
 };
 
@@ -214,7 +220,7 @@ struct TcpReassemblyData
 	bool reopenFileStreams[2];
 
 	// a flag indicating on which side was the latest message on this connection
-	int curSide;
+	int8_t curSide;
 
 	// stats data: num of data packets on each side, bytes seen on each side and messages seen on each side
 	int numOfDataPackets[2];
@@ -280,22 +286,25 @@ typedef std::map<uint32_t, TcpReassemblyData>::iterator TcpReassemblyConnMgrIter
  */
 void printUsage()
 {
-	printf("\nUsage:\n"
-			"------\n"
-			"%s [-hvlcms] [-r input_file] [-i interface] [-o output_dir] [-e bpf_filter] [-f max_files]\n"
-			"\nOptions:\n\n"
-			"    -r input_file : Input pcap/pcapng file to analyze. Required argument for reading from file\n"
-			"    -i interface  : Use the specified interface. Can be interface name (e.g eth0) or interface IPv4 address. Required argument for capturing from live interface\n"
-			"    -o output_dir : Specify output directory (default is '.')\n"
-			"    -e bpf_filter : Apply a BPF filter to capture file or live interface, meaning TCP reassembly will only work on filtered packets\n"
-			"    -f max_files  : Maximum number of file descriptors to use\n"
-			"    -c            : Write all output to console (nothing will be written to files)\n"
-			"    -m            : Write a metadata file for each connection\n"
-			"    -s            : Write each side of each connection to a separate file (default is writing both sides of each connection to the same file)\n"
-			"    -l            : Print the list of interfaces and exit\n"
-			"    -v            : Displays the current version and exists\n"
-			"    -h            : Display this help message and exit\n\n", AppName::get().c_str());
-	exit(0);
+	std::cout << std::endl
+		<< "Usage:" << std::endl
+		<< "------" << std::endl
+		<< pcpp::AppName::get() << " [-hvlcms] [-r input_file] [-i interface] [-o output_dir] [-e bpf_filter] [-f max_files]" << std::endl
+		<< std::endl
+		<< "Options:" << std::endl
+		<< std::endl
+		<< "    -r input_file : Input pcap/pcapng file to analyze. Required argument for reading from file" << std::endl
+		<< "    -i interface  : Use the specified interface. Can be interface name (e.g eth0) or interface IPv4 address. Required argument for capturing from live interface" << std::endl
+		<< "    -o output_dir : Specify output directory (default is '.')" << std::endl
+		<< "    -e bpf_filter : Apply a BPF filter to capture file or live interface, meaning TCP reassembly will only work on filtered packets" << std::endl
+		<< "    -f max_files  : Maximum number of file descriptors to use" << std::endl
+		<< "    -c            : Write all output to console (nothing will be written to files)" << std::endl
+		<< "    -m            : Write a metadata file for each connection" << std::endl
+		<< "    -s            : Write each side of each connection to a separate file (default is writing both sides of each connection to the same file)" << std::endl
+		<< "    -l            : Print the list of interfaces and exit" << std::endl
+		<< "    -v            : Display the current version and exit" << std::endl
+		<< "    -h            : Display this help message and exit" << std::endl
+		<< std::endl;
 }
 
 
@@ -304,9 +313,10 @@ void printUsage()
  */
 void printAppVersion()
 {
-	printf("%s %s\n", AppName::get().c_str(), getPcapPlusPlusVersionFull().c_str());
-	printf("Built: %s\n", getBuildDateTime().c_str());
-	printf("Built from: %s\n", getGitInfo().c_str());
+	std::cout
+		<< pcpp::AppName::get() << " " << pcpp::getPcapPlusPlusVersionFull() << std::endl
+		<< "Built: " << pcpp::getBuildDateTime() << std::endl
+		<< "Built from: " << pcpp::getGitInfo() << std::endl;
 	exit(0);
 }
 
@@ -316,12 +326,12 @@ void printAppVersion()
  */
 void listInterfaces()
 {
-	const std::vector<PcapLiveDevice*>& devList = PcapLiveDeviceList::getInstance().getPcapLiveDevicesList();
+	const std::vector<pcpp::PcapLiveDevice*>& devList = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDevicesList();
 
-	printf("\nNetwork interfaces:\n");
-	for (std::vector<PcapLiveDevice*>::const_iterator iter = devList.begin(); iter != devList.end(); iter++)
+	std::cout << std::endl << "Network interfaces:" << std::endl;
+	for (std::vector<pcpp::PcapLiveDevice*>::const_iterator iter = devList.begin(); iter != devList.end(); iter++)
 	{
-		printf("    -> Name: '%s'   IP address: %s\n", (*iter)->getName(), (*iter)->getIPv4Address().toString().c_str());
+		std::cout << "    -> Name: '" << (*iter)->getName() << "'   IP address: " << (*iter)->getIPv4Address().toString() << std::endl;
 	}
 	exit(0);
 }
@@ -330,7 +340,7 @@ void listInterfaces()
 /**
  * The callback being called by the TCP reassembly module whenever new data arrives on a certain connection
  */
-static void tcpReassemblyMsgReadyCallback(int sideIndex, TcpStreamData tcpData, void* userCookie)
+static void tcpReassemblyMsgReadyCallback(int8_t sideIndex, const pcpp::TcpStreamData& tcpData, void* userCookie)
 {
 	// extract the connection manager from the user cookie
 	TcpReassemblyConnMgr* connMgr = (TcpReassemblyConnMgr*)userCookie;
@@ -343,7 +353,7 @@ static void tcpReassemblyMsgReadyCallback(int sideIndex, TcpStreamData tcpData, 
 		iter = connMgr->find(tcpData.getConnectionData().flowKey);
 	}
 
-	int side;
+	int8_t side;
 
 	// if the user wants to write each side in a different file - set side as the sideIndex, otherwise write everything to the same file ("side 0")
 	if (GlobalConfig::getInstance().separateSides)
@@ -357,17 +367,18 @@ static void tcpReassemblyMsgReadyCallback(int sideIndex, TcpStreamData tcpData, 
 		// add the flow key of this connection to the list of open connections. If the return value isn't NULL it means that there are too many open files
 		// and we need to close the connection with least recently used file(s) in order to open a new one.
 		// The connection with the least recently used file is the return value
-		uint32_t* flowKeyToCloseFiles = GlobalConfig::getInstance().getRecentConnsWithActivity()->put(tcpData.getConnectionData().flowKey);
+		uint32_t flowKeyToCloseFiles;
+		int result = GlobalConfig::getInstance().getRecentConnsWithActivity()->put(tcpData.getConnectionData().flowKey, &flowKeyToCloseFiles);
 
-		// if flowKeyToCloseFiles isn't NULL it means we need to close the open files in this connection (the one with the least recently used files)
-		if (flowKeyToCloseFiles != NULL)
+		// if result equals to 1 it means we need to close the open files in this connection (the one with the least recently used files)
+		if (result == 1)
 		{
 			// find the connection from the flow key
-			TcpReassemblyConnMgrIter iter2 = connMgr->find(*flowKeyToCloseFiles);
+			TcpReassemblyConnMgrIter iter2 = connMgr->find(flowKeyToCloseFiles);
 			if (iter2 != connMgr->end())
 			{
 				// close files on both sides (if they're open)
-				for (int index = 0; index < 1; index++)
+				for (int index = 0; index < 2; index++)
 				{
 					if (iter2->second.fileStreams[index] != NULL)
 					{
@@ -380,8 +391,6 @@ static void tcpReassemblyMsgReadyCallback(int sideIndex, TcpStreamData tcpData, 
 					}
 				}
 			}
-
-			delete flowKeyToCloseFiles;
 		}
 
 		// get the file name according to the 5-tuple etc.
@@ -413,7 +422,7 @@ static void tcpReassemblyMsgReadyCallback(int sideIndex, TcpStreamData tcpData, 
 /**
  * The callback being called by the TCP reassembly module whenever a new connection is found. This method adds the connection to the connection manager
  */
-static void tcpReassemblyConnectionStartCallback(ConnectionData connectionData, void* userCookie)
+static void tcpReassemblyConnectionStartCallback(const pcpp::ConnectionData& connectionData, void* userCookie)
 {
 	// get a pointer to the connection manager
 	TcpReassemblyConnMgr* connMgr = (TcpReassemblyConnMgr*)userCookie;
@@ -434,7 +443,7 @@ static void tcpReassemblyConnectionStartCallback(ConnectionData connectionData, 
  * The callback being called by the TCP reassembly module whenever a connection is ending. This method removes the connection from the connection manager and writes the metadata file if requested
  * by the user
  */
-static void tcpReassemblyConnectionEndCallback(ConnectionData connectionData, TcpReassembly::ConnectionEndReason reason, void* userCookie)
+static void tcpReassemblyConnectionEndCallback(const pcpp::ConnectionData& connectionData, pcpp::TcpReassembly::ConnectionEndReason reason, void* userCookie)
 {
 	// get a pointer to the connection manager
 	TcpReassemblyConnMgr* connMgr = (TcpReassemblyConnMgr*)userCookie;
@@ -482,10 +491,10 @@ static void onApplicationInterrupted(void* cookie)
 /**
  * packet capture callback - called whenever a packet arrives on the live device (in live device capturing mode)
  */
-static void onPacketArrives(RawPacket* packet, PcapLiveDevice* dev, void* tcpReassemblyCookie)
+static void onPacketArrives(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* tcpReassemblyCookie)
 {
 	// get a pointer to the TCP reassembly instance and feed the packet arrived to it
-	TcpReassembly* tcpReassembly = (TcpReassembly*)tcpReassemblyCookie;
+	pcpp::TcpReassembly* tcpReassembly = (pcpp::TcpReassembly*)tcpReassemblyCookie;
 	tcpReassembly->reassemblePacket(packet);
 }
 
@@ -493,26 +502,26 @@ static void onPacketArrives(RawPacket* packet, PcapLiveDevice* dev, void* tcpRea
 /**
  * The method responsible for TCP reassembly on pcap/pcapng files
  */
-void doTcpReassemblyOnPcapFile(std::string fileName, TcpReassembly& tcpReassembly, std::string bpfFiler = "")
+void doTcpReassemblyOnPcapFile(std::string fileName, pcpp::TcpReassembly& tcpReassembly, std::string bpfFilter = "")
 {
 	// open input file (pcap or pcapng file)
-	IFileReaderDevice* reader = IFileReaderDevice::getReader(fileName.c_str());
+	pcpp::IFileReaderDevice* reader = pcpp::IFileReaderDevice::getReader(fileName);
 
 	// try to open the file device
 	if (!reader->open())
 		EXIT_WITH_ERROR("Cannot open pcap/pcapng file");
 
 	// set BPF filter if set by the user
-	if (bpfFiler != "")
+	if (!bpfFilter.empty())
 	{
-		if (!reader->setFilter(bpfFiler))
+		if (!reader->setFilter(bpfFilter))
 			EXIT_WITH_ERROR("Cannot set BPF filter to pcap file");
 	}
 
-	printf("Starting reading '%s'...\n", fileName.c_str());
+	std::cout << "Starting reading '" << fileName << "'..." << std::endl;
 
 	// run in a loop that reads one packet from the file in each iteration and feeds it to the TCP reassembly instance
-	RawPacket rawPacket;
+	pcpp::RawPacket rawPacket;
 	while (reader->getNextPacket(rawPacket))
 	{
 		tcpReassembly.reassemblePacket(&rawPacket);
@@ -528,38 +537,38 @@ void doTcpReassemblyOnPcapFile(std::string fileName, TcpReassembly& tcpReassembl
 	reader->close();
 	delete reader;
 
-	printf("Done! processed %d connections\n", (int)numOfConnectionsProcessed);
+	std::cout << "Done! processed " << numOfConnectionsProcessed << " connections" << std::endl;
 }
 
 
 /**
  * The method responsible for TCP reassembly on live traffic
  */
-void doTcpReassemblyOnLiveTraffic(PcapLiveDevice* dev, TcpReassembly& tcpReassembly, std::string bpfFiler = "")
+void doTcpReassemblyOnLiveTraffic(pcpp::PcapLiveDevice* dev, pcpp::TcpReassembly& tcpReassembly, std::string bpfFilter = "")
 {
 	// try to open device
 	if (!dev->open())
 		EXIT_WITH_ERROR("Cannot open interface");
 
 	// set BPF filter if set by the user
-	if (bpfFiler != "")
+	if (!bpfFilter.empty())
 	{
-		if (!dev->setFilter(bpfFiler))
+		if (!dev->setFilter(bpfFilter))
 			EXIT_WITH_ERROR("Cannot set BPF filter to interface");
 	}
 
-	printf("Starting packet capture on '%s'...\n", dev->getIPv4Address().toString().c_str());
+	std::cout << "Starting packet capture on '" << dev->getIPv4Address() << "'..." << std::endl;
 
 	// start capturing packets. Each packet arrived will be handled by onPacketArrives method
 	dev->startCapture(onPacketArrives, &tcpReassembly);
 
 	// register the on app close event to print summary stats on app termination
 	bool shouldStop = false;
-	ApplicationEventHandler::getInstance().onApplicationInterrupted(onApplicationInterrupted, &shouldStop);
+	pcpp::ApplicationEventHandler::getInstance().onApplicationInterrupted(onApplicationInterrupted, &shouldStop);
 
 	// run in an endless loop until the user presses ctrl+c
 	while(!shouldStop)
-		PCAP_SLEEP(1);
+		pcpp::multiPlatformSleep(1);
 
 	// stop capturing and close the live device
 	dev->stopCapture();
@@ -568,7 +577,7 @@ void doTcpReassemblyOnLiveTraffic(PcapLiveDevice* dev, TcpReassembly& tcpReassem
 	// close all connections which are still opened
 	tcpReassembly.closeAllConnections();
 
-	printf("Done! processed %d connections\n", (int)tcpReassembly.getConnectionInformation().size());
+	std::cout << "Done! processed " << tcpReassembly.getConnectionInformation().size() << " connections" << std::endl;
 }
 
 
@@ -577,21 +586,21 @@ void doTcpReassemblyOnLiveTraffic(PcapLiveDevice* dev, TcpReassembly& tcpReassem
  */
 int main(int argc, char* argv[])
 {
-	AppName::init(argc, argv);
+	pcpp::AppName::init(argc, argv);
 
-	std::string interfaceNameOrIP = "";
-	std::string inputPcapFileName = "";
-	std::string bpfFilter = "";
-	std::string outputDir = "";
+	std::string interfaceNameOrIP;
+	std::string inputPcapFileName;
+	std::string bpfFilter;
+	std::string outputDir;
 	bool writeMetadata = false;
 	bool writeToConsole = false;
 	bool separateSides = false;
 	size_t maxOpenFiles = DEFAULT_MAX_NUMBER_OF_CONCURRENT_OPEN_FILES;
 
 	int optionIndex = 0;
-	char opt = 0;
+	int opt = 0;
 
-	while((opt = getopt_long (argc, argv, "i:r:o:e:f:mcsvhl", TcpAssemblyOptions, &optionIndex)) != -1)
+	while((opt = getopt_long(argc, argv, "i:r:o:e:f:mcsvhl", TcpAssemblyOptions, &optionIndex)) != -1)
 	{
 		switch (opt)
 		{
@@ -623,6 +632,7 @@ int main(int argc, char* argv[])
 				break;
 			case 'h':
 				printUsage();
+				exit(0);
 				break;
 			case 'v':
 				printAppVersion();
@@ -637,11 +647,11 @@ int main(int argc, char* argv[])
 	}
 
 	// if no interface nor input pcap file were provided - exit with error
-	if (inputPcapFileName == "" && interfaceNameOrIP == "")
+	if (inputPcapFileName.empty() && interfaceNameOrIP.empty())
 		EXIT_WITH_ERROR("Neither interface nor input pcap file were provided");
 
 	// verify output dir exists
-	if (outputDir != "" && !directoryExists(outputDir))
+	if (!outputDir.empty() && !pcpp::directoryExists(outputDir))
 		EXIT_WITH_ERROR("Output directory doesn't exist");
 
 	// set global config singleton with input configuration
@@ -655,30 +665,19 @@ int main(int argc, char* argv[])
 	TcpReassemblyConnMgr connMgr;
 
 	// create the TCP reassembly instance
-	TcpReassembly tcpReassembly(tcpReassemblyMsgReadyCallback, &connMgr, tcpReassemblyConnectionStartCallback, tcpReassemblyConnectionEndCallback);
+	pcpp::TcpReassembly tcpReassembly(tcpReassemblyMsgReadyCallback, &connMgr, tcpReassemblyConnectionStartCallback, tcpReassemblyConnectionEndCallback);
 
 	// analyze in pcap file mode
-	if (inputPcapFileName != "")
+	if (!inputPcapFileName.empty())
 	{
 		doTcpReassemblyOnPcapFile(inputPcapFileName, tcpReassembly, bpfFilter);
 	}
 	else // analyze in live traffic mode
 	{
 		// extract pcap live device by interface name or IP address
-		PcapLiveDevice* dev = NULL;
-		IPv4Address interfaceIP(interfaceNameOrIP);
-		if (interfaceIP.isValid())
-		{
-			dev = PcapLiveDeviceList::getInstance().getPcapLiveDeviceByIp(interfaceIP);
-			if (dev == NULL)
-				EXIT_WITH_ERROR("Couldn't find interface by provided IP");
-		}
-		else
-		{
-			dev = PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(interfaceNameOrIP);
-			if (dev == NULL)
-				EXIT_WITH_ERROR("Couldn't find interface by provided name");
-		}
+		pcpp::PcapLiveDevice* dev = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByIpOrName(interfaceNameOrIP);
+		if (dev == NULL)
+			EXIT_WITH_ERROR("Couldn't find interface by provided IP address or name");
 
 		// start capturing packets and do TCP reassembly
 		doTcpReassemblyOnLiveTraffic(dev, tcpReassembly, bpfFilter);

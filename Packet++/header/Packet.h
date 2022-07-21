@@ -23,7 +23,8 @@ namespace pcpp
 	 * For example: for a standard HTTP request packet the layer will look like this: EthLayer -> IPv4Layer -> TcpLayer -> HttpRequestLayer <BR>
 	 * Packet instance isn't read only. The user can add or remove layers, update current layer, etc.
 	 */
-	class Packet {
+	class Packet
+	{
 		friend class Layer;
 	private:
 		RawPacket* m_RawPacket;
@@ -32,15 +33,27 @@ namespace pcpp
 		uint64_t m_ProtocolTypes;
 		size_t m_MaxPacketLen;
 		bool m_FreeRawPacket;
+		bool m_CanReallocateData;
 
 	public:
 
 		/**
-		 * A constructor for creating a new packet. Very useful when creating packets.
+		 * A constructor for creating a new packet (with no layers).
 		 * When using this constructor an empty raw buffer is allocated (with the size of maxPacketLen) and a new RawPacket is created
 		 * @param[in] maxPacketLen The expected packet length in bytes
 		 */
 		Packet(size_t maxPacketLen = 1);
+
+		/**
+		 * A constructor for creating a new packet with a buffer that is pre-allocated by the user.
+		 * The packet is created empty (with no layers), which means the constructor doesn't parse the data in the buffer.
+		 * Instead, all of the raw data of this packet it written to this buffer: whenever a layer is added, it's data is written to this buffer.
+		 * The buffer isn't freed and it's content isn't erased when the packet object is deleted.
+		 * This constructor is useful when you already have a memory buffer and you want to create packet data in it.
+		 * @param[in] buffer A pointer to a pre-allocated memory buffer
+		 * @param[in] bufferSize The size of the buffer
+		 */
+		Packet(uint8_t* buffer, size_t bufferSize);
 
 		/**
 		 * A constructor for creating a packet out of already allocated RawPacket. Very useful when parsing packets that came from the network.
@@ -85,14 +98,14 @@ namespace pcpp
 		 * class, for example layers that were added by addLayer() or insertLayer() ). In addition it frees the raw packet if it was allocated by
 		 * this instance (meaning if it was allocated by this instance constructor)
 		 */
-		virtual ~Packet();
+		virtual ~Packet() { destructPacketData(); }
 
 		/**
 		 * A copy constructor for this class. This copy constructor copies all the raw data and re-create all layers. So when the original Packet
 		 * is being freed, no data will be lost in the copied instance
 		 * @param[in] other The instance to copy from
 		 */
-		Packet(const Packet& other);
+		Packet(const Packet& other) { copyDataFrom(other); }
 
 		/**
 		 * Assignment operator overloading. It first frees all layers allocated by this instance (Notice: it doesn't free layers that weren't allocated by this
@@ -107,7 +120,7 @@ namespace pcpp
 		 * Get a pointer to the Packet's RawPacket
 		 * @return A pointer to the Packet's RawPacket
 		 */
-		inline RawPacket* getRawPacket() { return m_RawPacket; }
+		RawPacket* getRawPacket() const { return m_RawPacket; }
 
 		/**
 		 * Set a RawPacket and re-construct all packet layers
@@ -124,19 +137,19 @@ namespace pcpp
 		 * Get a pointer to the Packet's RawPacket in a read-only manner
 		 * @return A pointer to the Packet's RawPacket
 		 */
-		inline RawPacket* getRawPacketReadOnly() const { return m_RawPacket; }
+		RawPacket* getRawPacketReadOnly() const { return m_RawPacket; }
 
 		/**
 		 * Get a pointer to the first (lowest) layer in the packet
 		 * @return A pointer to the first (lowest) layer in the packet
 		 */
-		inline Layer* getFirstLayer() { return m_FirstLayer; }
+		Layer* getFirstLayer() const { return m_FirstLayer; }
 
 		/**
 		 * Get a pointer to the last (highest) layer in the packet
 		 * @return A pointer to the last (highest) layer in the packet
 		 */
-		inline Layer* getLastLayer() { return m_LastLayer; }
+		Layer* getLastLayer() const { return m_LastLayer; }
 
 		/**
 		 * Add a new layer as the last layer in the packet. This method gets a pointer to the new layer as a parameter
@@ -147,7 +160,7 @@ namespace pcpp
 		 * @return True if everything went well or false otherwise (an appropriate error log message will be printed in
 		 * such cases)
 		 */
-		bool addLayer(Layer* newLayer, bool ownInPacket = false);
+		bool addLayer(Layer* newLayer, bool ownInPacket = false) { return insertLayer(m_LastLayer, newLayer, ownInPacket); }
 
 		/**
 		 * Insert a new layer after an existing layer in the packet. This method gets a pointer to the new layer as a
@@ -165,11 +178,11 @@ namespace pcpp
 
 		/**
 		 * Remove an existing layer from the packet. The layer to removed is identified by its type (protocol). If the
-		 * packet has multiple layers of the same type in the packet the user may specify the index of the layer to remove 
-		 * (the default index is 0 - remove the first layer of this type). If the layer was allocated during packet creation 
+		 * packet has multiple layers of the same type in the packet the user may specify the index of the layer to remove
+		 * (the default index is 0 - remove the first layer of this type). If the layer was allocated during packet creation
 		 * it will be deleted and any pointer to it will get invalid. However if the layer was allocated by the user and
-		 * manually added to the packet it will simply get detached from the packet, meaning the pointer to it will stay 
-		 * valid and its data (that was removed from the packet) will be copied back to the layer. In that case it's 
+		 * manually added to the packet it will simply get detached from the packet, meaning the pointer to it will stay
+		 * valid and its data (that was removed from the packet) will be copied back to the layer. In that case it's
 		 * the user's responsibility to delete the layer instance
 		 * @param[in] layerType The layer type (protocol) to remove
 		 * @param[in] index If there are multiple layers of the same type, indicate which instance to remove. The default
@@ -182,23 +195,23 @@ namespace pcpp
 		/**
 		 * Remove the first layer in the packet. The layer will be deleted if it was allocated during packet creation, or detached
 		 * if was allocated outside of the packet. Please refer to removeLayer() to get more info
-		 * @return True if layer removed successfully, or false if removing the layer failed or if there are no layers in the 
-		 * packet. In any case of failure an appropriate error log message will be printed 
+		 * @return True if layer removed successfully, or false if removing the layer failed or if there are no layers in the
+		 * packet. In any case of failure an appropriate error log message will be printed
 		 */
 		bool removeFirstLayer();
 
 		/**
 		 * Remove the last layer in the packet. The layer will be deleted if it was allocated during packet creation, or detached
 		 * if was allocated outside of the packet. Please refer to removeLayer() to get more info
-		 * @return True if layer removed successfully, or false if removing the layer failed or if there are no layers in the 
-		 * packet. In any case of failure an appropriate error log message will be printed 
+		 * @return True if layer removed successfully, or false if removing the layer failed or if there are no layers in the
+		 * packet. In any case of failure an appropriate error log message will be printed
 		 */
 		bool removeLastLayer();
 
 		/**
 		 * Remove all layers that come after a certain layer. All layers removed will be deleted if they were allocated during
 		 * packet creation or detached if were allocated outside of the packet, please refer to removeLayer() to get more info
-		 * @param[in] layer A pointer to the layer to begin removing from. Please note this layer will not be removed, only the 
+		 * @param[in] layer A pointer to the layer to begin removing from. Please note this layer will not be removed, only the
 		 * layers that come after it will be removed. Also, if removal of one layer failed, the method will return immediately and
 		 * the following layers won't be deleted
 		 * @return True if all layers were removed successfully, or false if failed to remove at least one layer. In any case of
@@ -207,30 +220,30 @@ namespace pcpp
 		bool removeAllLayersAfter(Layer* layer);
 
 		/**
-		 * Detach a layer from the packet. Detaching means the layer instance will not be deleted, but rather seperated from the
+		 * Detach a layer from the packet. Detaching means the layer instance will not be deleted, but rather separated from the
 		 * packet - e.g it will be removed from the layer chain of the packet and its data will be copied from the packet buffer
-		 * into an internal layer buffer. After a layer is detached, it can be added into another packet (but it's impossible to 
-		 * attach a layer to multiple packets in the same time). After layer is detached, it's the user's responsibility to 
+		 * into an internal layer buffer. After a layer is detached, it can be added into another packet (but it's impossible to
+		 * attach a layer to multiple packets in the same time). After layer is detached, it's the user's responsibility to
 		 * delete it when it's not needed anymore
 		 * @param[in] layerType The layer type (protocol) to detach from the packet
 		 * @param[in] index If there are multiple layers of the same type, indicate which instance to detach. The default
 		 * value is 0, meaning detach the first layer of this type
-		 * @return A pointer to the detached layer or NULL if detaching process failed. In any case of failure an 
+		 * @return A pointer to the detached layer or NULL if detaching process failed. In any case of failure an
 		 * appropriate error log message will be printed
 		 */
 		Layer* detachLayer(ProtocolType layerType, int index = 0);
 
 		/**
-		 * Detach a layer from the packet. Detaching means the layer instance will not be deleted, but rather seperated from the
+		 * Detach a layer from the packet. Detaching means the layer instance will not be deleted, but rather separated from the
 		 * packet - e.g it will be removed from the layer chain of the packet and its data will be copied from the packet buffer
-		 * into an internal layer buffer. After a layer is detached, it can be added into another packet (but it's impossible to 
-		 * attach a layer to multiple packets at the same time). After layer is detached, it's the user's responsibility to 
+		 * into an internal layer buffer. After a layer is detached, it can be added into another packet (but it's impossible to
+		 * attach a layer to multiple packets at the same time). After layer is detached, it's the user's responsibility to
 		 * delete it when it's not needed anymore
 		 * @param[in] layer A pointer to the layer to detach
-		 * @return True if the layer was detached successfully, or false if something went wrong. In any case of failure an 
+		 * @return True if the layer was detached successfully, or false if something went wrong. In any case of failure an
 		 * appropriate error log message will be printed
 		 */
-		bool detachLayer(Layer* layer);
+		bool detachLayer(Layer* layer) { return removeLayer(layer, false); }
 
 		/**
 		 * Get a pointer to the layer of a certain type (protocol). This method goes through the layers and returns a layer
@@ -240,32 +253,44 @@ namespace pcpp
 		 * value is 0, meaning fetch the first layer of this type
 		 * @return A pointer to the layer or NULL if no such layer was found
 		 */
-		Layer* getLayerOfType(ProtocolType layerType, int index = 0);
+		Layer* getLayerOfType(ProtocolType layerType, int index = 0) const;
 
 		/**
 		 * A templated method to get a layer of a certain type (protocol). If no layer of such type is found, NULL is returned
+		 * @param[in] reverseOrder The optional parameter that indicates that the lookup should run in reverse order, the default value is false
 		 * @return A pointer to the layer of the requested type, NULL if not found
 		 */
 		template<class TLayer>
-		TLayer* getLayerOfType();
+		TLayer* getLayerOfType(bool reverseOrder = false) const;
 
 		/**
 		 * A templated method to get the first layer of a certain type (protocol), start searching from a certain layer.
 		 * For example: if a packet looks like: EthLayer -> VlanLayer(1) -> VlanLayer(2) -> VlanLayer(3) -> IPv4Layer
 		 * and the user put VlanLayer(2) as a parameter and wishes to search for a VlanLayer, VlanLayer(3) will be returned
 		 * If no layer of such type is found, NULL is returned
-		 * @param[in] after A pointer to the layer to start search from
+		 * @param[in] startLayer A pointer to the layer to start search from
 		 * @return A pointer to the layer of the requested type, NULL if not found
 		 */
 		template<class TLayer>
-		TLayer* getNextLayerOfType(Layer* after);
+		TLayer* getNextLayerOfType(Layer* startLayer) const;
+
+		/**
+		 * A templated method to get the first layer of a certain type (protocol), start searching from a certain layer.
+		 * For example: if a packet looks like: EthLayer -> VlanLayer(1) -> VlanLayer(2) -> VlanLayer(3) -> IPv4Layer
+		 * and the user put VlanLayer(2) as a parameter and wishes to search for a VlanLayer, VlanLayer(1) will be returned
+		 * If no layer of such type is found, NULL is returned
+		 * @param[in] startLayer A pointer to the layer to start search from
+		 * @return A pointer to the layer of the requested type, NULL if not found
+		 */
+		template<class TLayer>
+		TLayer* getPrevLayerOfType(Layer* startLayer) const;
 
 		/**
 		 * Check whether the packet contains a certain protocol
 		 * @param[in] protocolType The protocol type to search
 		 * @return True if the packet contains the protocol, false otherwise
 		 */
-		inline bool isPacketOfType(ProtocolType protocolType) { return m_ProtocolTypes & protocolType; }
+		bool isPacketOfType(ProtocolType protocolType) const { return m_ProtocolTypes & protocolType; }
 
 		/**
 		 * Each layer can have fields that can be calculate automatically from other fields using Layer#computeCalculateFields(). This method forces all layers to calculate these
@@ -279,14 +304,14 @@ namespace pcpp
 		 * @param[in] timeAsLocalTime Print time as local time or GMT. Default (true value) is local time, for GMT set to false
 		 * @return A string containing most relevant data from all layers (looks like the packet description in Wireshark)
 		 */
-		std::string toString(bool timeAsLocalTime = true);
+		std::string toString(bool timeAsLocalTime = true) const;
 
 		/**
 		 * Similar to toString(), but instead of one string it outputs a list of strings, one string for every layer
 		 * @param[out] result A string vector that will contain all strings
 		 * @param[in] timeAsLocalTime Print time as local time or GMT. Default (true value) is local time, for GMT set to false
 		 */
-		void toStringList(std::vector<std::string>& result, bool timeAsLocalTime = true);
+		void toStringList(std::vector<std::string>& result, bool timeAsLocalTime = true) const;
 
 	private:
 		void copyDataFrom(const Packet& other);
@@ -300,35 +325,68 @@ namespace pcpp
 
 		bool removeLayer(Layer* layer, bool tryToDelete);
 
-		std::string printPacketInfo(bool timeAsLocalTime);
+		std::string printPacketInfo(bool timeAsLocalTime) const;
 
 		Layer* createFirstLayer(LinkLayerType linkType);
-	};
+	}; // class Packet
+
+
+	// implementation of inline methods
 
 	template<class TLayer>
-	TLayer* Packet::getLayerOfType()
+	TLayer* Packet::getLayerOfType(bool reverse) const
 	{
-		if (dynamic_cast<TLayer*>(m_FirstLayer) != NULL)
-			return (TLayer*)m_FirstLayer;
+		if (!reverse)
+		{
+			if (dynamic_cast<TLayer*>(getFirstLayer()) != NULL)
+				return dynamic_cast<TLayer*>(getFirstLayer());
 
-		return getNextLayerOfType<TLayer>(m_FirstLayer);
+			return getNextLayerOfType<TLayer>(getFirstLayer());
+		}
+
+		// lookup in reverse order
+		if (dynamic_cast<TLayer*>(getLastLayer()) != NULL)
+			return dynamic_cast<TLayer*>(getLastLayer());
+
+		return getPrevLayerOfType<TLayer>(getLastLayer());
 	}
 
 	template<class TLayer>
-	TLayer* Packet::getNextLayerOfType(Layer* after)
+	TLayer* Packet::getNextLayerOfType(Layer* curLayer) const
 	{
-		if (after == NULL)
+		if (curLayer == NULL)
 			return NULL;
 
-		Layer* curLayer = after->getNextLayer();
+		curLayer = curLayer->getNextLayer();
 		while ((curLayer != NULL) && (dynamic_cast<TLayer*>(curLayer) == NULL))
 		{
 			curLayer = curLayer->getNextLayer();
 		}
 
-		return (TLayer*)curLayer;
+		return dynamic_cast<TLayer*>(curLayer);
+	}
+
+	template<class TLayer>
+	TLayer* Packet::getPrevLayerOfType(Layer* curLayer) const
+	{
+		if (curLayer == NULL)
+			return NULL;
+
+		curLayer = curLayer->getPrevLayer();
+		while (curLayer != NULL && dynamic_cast<TLayer*>(curLayer) == NULL)
+		{
+			curLayer = curLayer->getPrevLayer();
+		}
+
+		return dynamic_cast<TLayer*>(curLayer);
 	}
 
 } // namespace pcpp
+
+inline std::ostream& operator<<(std::ostream& os, const pcpp::Packet& packet)
+{
+	os << packet.toString();
+	return os;
+}
 
 #endif /* PACKETPP_PACKET */

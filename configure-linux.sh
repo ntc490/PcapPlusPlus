@@ -16,29 +16,35 @@ function HELP {
    echo "  1) Without any switches. In this case the script will guide you through using wizards"
    echo "  2) With switches, as described below"
    echo ""
-   echo -e "Basic usage: $SCRIPT [-h] [--pf-ring] [--pf-ring-home] [--dpdk] [--dpdk-home] [--use-immediate-mode] [--install-dir] [--libpcap-include-dir] [--libpcap-lib-dir]"\\n
+   echo -e "Basic usage: $SCRIPT [-h] [--pf-ring] [--pf-ring-home] [--dpdk] [--dpdk-home] [--use-immediate-mode] [--set-direction-enabled] [--install-dir] [--libpcap-include-dir] [--libpcap-lib-dir] [--use-zstd]"\\n
    echo "The following switches are recognized:"
-   echo "--default             --Setup PcapPlusPlus for Linux without PF_RING or DPDK. In this case you must not set --pf-ring or --dpdk"
+   echo "--default                --Setup PcapPlusPlus for Linux without PF_RING or DPDK. In this case you must not set --pf-ring or --dpdk"
    echo ""
-   echo "--pf-ring             --Setup PcapPlusPlus with PF_RING. In this case you must also set --pf-ring-home"
-   echo "--pf-ring-home        --Sets PF_RING home directory. Use only when --pf-ring is set"
+   echo "--pf-ring                --Setup PcapPlusPlus with PF_RING. In this case you must also set --pf-ring-home"
+   echo "--pf-ring-home           --Sets PF_RING home directory. Use only when --pf-ring is set"
    echo ""
-   echo "--dpdk                --Setup PcapPlusPlus with DPDK. In this case you must also set --dpdk-home"
-   echo "--dpdk-home           --Sets DPDK home directoy. Use only when --dpdk is set"
+   echo "--dpdk                   --Setup PcapPlusPlus with DPDK. In this case you must also set --dpdk-home"
+   echo "--dpdk-home              --Sets DPDK home directory. Use only when --dpdk is set"
    echo ""
-   echo "--use-immediate-mode  --Use libpcap immediate mode which enables getting packets as fast as possible (supported on libpcap>=1.5)"
+   echo "--use-immediate-mode     --Use libpcap immediate mode which enables getting packets as fast as possible (supported on libpcap>=1.5)"
    echo ""
-   echo "--install-dir         --Installation directory. Default is /usr/local"
+   echo "--set-direction-enabled  --Set direction for capturing incoming or outgoing packets (supported on libpcap>=0.9.1)"
    echo ""
-   echo "--libpcap-include-dir --libpcap header files directory. This parameter is optional and if omitted PcapPlusPlus will look for"
-   echo "                        the header files in the default include paths"
-   echo "--libpcap-lib-dir     --libpcap pre compiled lib directory. This parameter is optional and if omitted PcapPlusPlus will look for"
-   echo "                        the lib file in the default lib paths"
+   echo "--install-dir            --Installation directory. Default is /usr/local"
    echo ""
-   echo -e "-h|--help             --Displays this help message and exits. No further actions are performed"\\n
+   echo "--libpcap-include-dir    --libpcap header files directory. This parameter is optional and if omitted PcapPlusPlus will look for"
+   echo "                           the header files in the default include paths"
+   echo "--libpcap-lib-dir        --libpcap pre compiled lib directory. This parameter is optional and if omitted PcapPlusPlus will look for"
+   echo "                           the lib file in the default lib paths"
+   echo "--use-zstd               --Use Zstd for pcapng files compression/decompression. This parameter is optional"
+   echo ""
+   echo "--musl                   --Musl base destination platform: i.e. Alpine. This parameter is optional"
+   echo ""
+   echo -e "-h|--help                --Displays this help message and exits. No further actions are performed"\\n
    echo -e "Examples:"
    echo -e "      $SCRIPT --default"
    echo -e "      $SCRIPT --use-immediate-mode"
+   echo -e "      $SCRIPT --set-direction-enabled"
    echo -e "      $SCRIPT --libpcap-include-dir /home/myuser/my-libpcap/include --libpcap-lib-dir /home/myuser/my-libpcap/lib"
    echo -e "      $SCRIPT --install-dir /home/myuser/my-install-dir"
    echo -e "      $SCRIPT --pf-ring --pf-ring-home /home/myuser/PF_RING"
@@ -55,9 +61,10 @@ PF_RING_HOME=""
 COMPILE_WITH_DPDK=0
 DPDK_HOME=""
 HAS_PCAP_IMMEDIATE_MODE=0
+HAS_SET_DIRECTION_ENABLED=0
 
-# initializing libpcap include/lib dirs to an empty string 
-LIBPCAP_INLCUDE_DIR=""
+# initializing libpcap include/lib dirs to an empty string
+LIBPCAP_INCLUDE_DIR=""
 LIBPCAP_LIB_DIR=""
 
 # default installation directory
@@ -118,7 +125,7 @@ if [ $NUMARGS -eq 0 ]; then
 else
 
    # these are all the possible switches
-   OPTS=`getopt -o h --long default,pf-ring,pf-ring-home:,dpdk,dpdk-home:,help,use-immediate-mode,install-dir:,libpcap-include-dir:,libpcap-lib-dir: -- "$@"`
+   OPTS=`getopt -o h --long default,pf-ring,pf-ring-home:,dpdk,dpdk-home:,help,use-immediate-mode,set-direction-enabled,install-dir:,libpcap-include-dir:,libpcap-lib-dir:,use-zstd,musl -- "$@"`
 
    # if user put an illegal switch - print HELP and exit
    if [ $? -ne 0 ]; then
@@ -167,9 +174,14 @@ else
          HAS_PCAP_IMMEDIATE_MODE=1
          shift ;;
 
+       # set direction enabled
+       --set-direction-enabled)
+         HAS_SET_DIRECTION_ENABLED=1
+         shift ;;
+
        # non-default libpcap include dir
        --libpcap-include-dir)
-         LIBPCAP_INLCUDE_DIR=$2
+         LIBPCAP_INCLUDE_DIR=$2
          shift 2 ;;
 
        # non-default libpcap lib dir
@@ -185,6 +197,16 @@ else
             exit 1
          fi
          shift 2 ;;
+
+       # use Zstd
+       --use-zstd)
+         USE_ZSTD=1
+         shift ;;
+
+      # use Musl
+       --musl)
+         MUSL=1
+         shift ;;
 
        # help switch - display help and exit
        -h|--help)
@@ -251,10 +273,23 @@ if (( $COMPILE_WITH_PF_RING > 0 )) ; then
 fi
 
 
-# function to extract DPDK major + minor version from <DPDK_HOM>/pkg/dpdk.spec file
+# function to extract DPDK major + minor version from <DPDK_HOM>/pkg/dpdk.spec file (older DPDK versions)
+# or from <DPDK_HOM>/VERSION file (newer DPDK versions)
+# or from the rte_build_config.h
 # return: DPDK version (major + minor only)
 function get_dpdk_version() {
-   echo $(grep "Version" $DPDK_HOME/pkg/dpdk.spec | cut -d' ' -f2 | cut -d'.' -f 1,2)
+   if [ -f $DPDK_HOME/pkg/dpdk.spec ]; then
+      echo $(grep "Version" $DPDK_HOME/pkg/dpdk.spec | cut -d' ' -f2 | cut -d'.' -f 1,2);
+   elif [ -f $DPDK_HOME/VERSION ]; then
+      echo $(cat $DPDK_HOME/VERSION | cut -d'.' -f 1,2);
+   elif [ -f $DPDK_HOME/rte_build_config.h ]; then
+      YEAR=$(grep RTE_VER_YEAR $DPDK_HOME/build/rte_build_config.h|cut -d ' ' -f3);
+      MONTH=$(grep RTE_VER_MONTH $DPDK_HOME/build/rte_build_config.h|cut -d ' ' -f3);
+      MINOR=$(grep RTE_VER_MINOR $DPDK_HOME/build/rte_build_config.h|cut -d ' ' -f3);
+      echo $YEAR.$MONTH.$MINOR;
+   else
+      echo "ERROR";
+   fi
 }
 
 # function to compare between 2 versions (each constructed of major + minor)
@@ -271,10 +306,10 @@ if (( $COMPILE_WITH_DPDK > 0 )) ; then
    # add DPDK definitions to PcapPlusPlus.mk
    cat mk/PcapPlusPlus.mk.dpdk >> $PCAPPLUSPLUS_MK
 
-   # if DPDK ver >= 17.11 concat additional definitions to PcapPlusPlus.mk
+   # if DPDK ver < 20.11 concat additional definitions to PcapPlusPlus.mk
    CUR_DPDK_VERSION=$(get_dpdk_version)
-   if [ "$(compare_versions $CUR_DPDK_VERSION 17.11)" -eq "1" ] ; then
-      cat mk/PcapPlusPlus.mk.dpdk_new >> $PCAPPLUSPLUS_MK
+   if [ "$(compare_versions $CUR_DPDK_VERSION 20.11)" -eq "0" ] ; then
+      cat mk/PcapPlusPlus.mk.dpdk_legacy >> $PCAPPLUSPLUS_MK
    fi
 
    # set USE_DPDK variable in platform.mk
@@ -283,22 +318,19 @@ if (( $COMPILE_WITH_DPDK > 0 )) ; then
    # set DPDK home to RTE_SDK variable in platform.mk
    echo -e "\n\nRTE_SDK := "$DPDK_HOME >> $PLATFORM_MK
 
-   # set USE_DPDK varaible in PcapPlusPlus.mk
+   # set USE_DPDK variable in PcapPlusPlus.mk
    sed -i "2s|^|USE_DPDK := 1\n\n|" $PCAPPLUSPLUS_MK
 
    # set DPDK home to RTE_SDK variable in PcapPlusPlus.mk
    sed -i "2s|^|RTE_SDK := $DPDK_HOME\n\n|" $PCAPPLUSPLUS_MK
 
-   # set the setup-dpdk script:
+   # set the setup_dpdk.py:
 
-   # copy the initial version to PcapPlusPlus root dir
-   cp mk/setup-dpdk.sh.template setup-dpdk.sh
+   # copy to PcapPlusPlus root dir
+   cp mk/setup_dpdk.py .
 
-   # make it an executable
-   chmod +x setup-dpdk.sh
-
-   # replace the RTE_SDK placeholder with DPDK home
-   sed -i "s|###RTE_SDK###|$DPDK_HOME|g" setup-dpdk.sh
+   # create a settings file with RTE_SDK folder
+   echo -e "RTE_SDK=$DPDK_HOME\r" > setup_dpdk_settings.dat
 
 fi
 
@@ -306,11 +338,25 @@ if (( $HAS_PCAP_IMMEDIATE_MODE > 0 )) ; then
    echo -e "HAS_PCAP_IMMEDIATE_MODE := 1\n\n" >> $PCAPPLUSPLUS_MK
 fi
 
+if (( $HAS_SET_DIRECTION_ENABLED > 0 )) ; then
+   echo -e "HAS_SET_DIRECTION_ENABLED := 1\n\n" >> $PCAPPLUSPLUS_MK
+fi
+
+if [ -n "$USE_ZSTD" ]; then
+   echo -e "DEFS += -DUSE_Z_STD" > 3rdParty/LightPcapNg/zstd.mk
+   cat mk/PcapPlusPlus.mk.zstd >> $PCAPPLUSPLUS_MK
+fi
+
+if [ -n "$MUSL" ]; then
+   cat mk/platform.mk.musl >> $PCAPPLUSPLUS_MK
+   cat mk/platform.mk.musl >> $PLATFORM_MK
+fi
+
 # non-default libpcap include dir
-if [ -n "$LIBPCAP_INLCUDE_DIR" ]; then
+if [ -n "$LIBPCAP_INCLUDE_DIR" ]; then
    echo -e "# non-default libpcap include dir" >> $PCAPPLUSPLUS_MK
-   echo -e "LIBPCAP_INLCUDE_DIR := $LIBPCAP_INLCUDE_DIR" >> $PCAPPLUSPLUS_MK
-   echo -e "PCAPPP_INCLUDES += -I\$(LIBPCAP_INLCUDE_DIR)\n" >> $PCAPPLUSPLUS_MK
+   echo -e "LIBPCAP_INCLUDE_DIR := $LIBPCAP_INCLUDE_DIR" >> $PCAPPLUSPLUS_MK
+   echo -e "PCAPPP_INCLUDES += -I\$(LIBPCAP_INCLUDE_DIR)\n" >> $PCAPPLUSPLUS_MK
 fi
 
 # non-default libpcap lib dir
@@ -327,7 +373,7 @@ chmod +x mk/install.sh
 
 cp mk/uninstall.sh.template mk/uninstall.sh
 sed -i.bak "s|{{INSTALL_DIR}}|$INSTALL_DIR|g" mk/uninstall.sh && rm mk/uninstall.sh.bak
-chmod +x mk/install.sh
+chmod +x mk/uninstall.sh
 
 
 # finished setup script

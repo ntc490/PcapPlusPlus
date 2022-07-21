@@ -1,7 +1,9 @@
 #define LOG_MODULE NetworkUtils
 
+#include <condition_variable>
+#include <errno.h>
+#include <mutex>
 #include <stdlib.h>
-#include <pthread.h>
 #include "Logger.h"
 #include "Packet.h"
 #include "EthLayer.h"
@@ -11,12 +13,7 @@
 #include "DnsLayer.h"
 #include "PcapFilter.h"
 #include "NetworkUtils.h"
-#ifdef LINUX //for using ntohl, ntohs, etc.
-#include <in.h>
-#include <errno.h>
-#elif MAC_OS_X
-#include <sys/errno.h>
-#endif
+#include "EndianPortable.h"
 #ifdef _MSC_VER
 #include "SystemUtils.h"
 #endif
@@ -24,7 +21,7 @@
 #define ETIMEDOUT  10060
 #endif
 
-#define DNS_PORT	    53
+#define DNS_PORT   53
 
 
 namespace pcpp
@@ -33,10 +30,10 @@ namespace pcpp
 const int NetworkUtils::DefaultTimeout = 5;
 
 
-struct ArpingRecievedData
+struct ArpingReceivedData
 {
-	pthread_mutex_t* mutex;
-	pthread_cond_t* cond;
+	std::mutex &mutex;
+	std::condition_variable &cond;
 	IPv4Address ipAddr;
 	clock_t start;
 	MacAddress result;
@@ -44,13 +41,13 @@ struct ArpingRecievedData
 };
 
 
-static void arpPacketRecieved(RawPacket* rawPacket, PcapLiveDevice* device, void* userCookie)
+static void arpPacketReceived(RawPacket* rawPacket, PcapLiveDevice* device, void* userCookie)
 {
 	// extract timestamp of packet
-	clock_t recieveTime = clock();
+	clock_t receiveTime = clock();
 
 	// get the data from the main thread
-	ArpingRecievedData* data = (ArpingRecievedData*)userCookie;
+	ArpingReceivedData* data = (ArpingReceivedData*)userCookie;
 
 	// parse the response packet
 	Packet packet(rawPacket);
@@ -60,13 +57,13 @@ static void arpPacketRecieved(RawPacket* rawPacket, PcapLiveDevice* device, void
 		return;
 
 	// extract the ARP layer from the packet
-	ArpLayer* arpReplyLayer = packet.getLayerOfType<ArpLayer>();
+	ArpLayer* arpReplyLayer = packet.getLayerOfType<ArpLayer>(true); // lookup in reverse order
 	if (arpReplyLayer == NULL)
 		return;
 
 	// verify it's the right ARP response
-	if (arpReplyLayer->getArpHeader()->hardwareType != htons(1) /* Ethernet */
-			|| arpReplyLayer->getArpHeader()->protocolType != htons(PCPP_ETHERTYPE_IP))
+	if (arpReplyLayer->getArpHeader()->hardwareType != htobe16(1) /* Ethernet */
+			|| arpReplyLayer->getArpHeader()->protocolType != htobe16(PCPP_ETHERTYPE_IP))
 		return;
 
 	// verify the ARP response is the response for out request (and not some arbitrary ARP response)
@@ -74,21 +71,19 @@ static void arpPacketRecieved(RawPacket* rawPacket, PcapLiveDevice* device, void
 		return;
 
 	// measure response time
-	double diffticks = recieveTime-data->start;
+	double diffticks = receiveTime-data->start;
 	double diffms = (diffticks*1000)/CLOCKS_PER_SEC;
 
 	data->arpResponseTime = diffms;
 	data->result = arpReplyLayer->getSenderMacAddress();
 
 	// signal the main thread the ARP reply was received
-	pthread_mutex_lock(data->mutex);
-	pthread_cond_signal(data->cond);
-    pthread_mutex_unlock(data->mutex);
+	data->cond.notify_one();
 }
 
 
 MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* device, double& arpResponseTimeMS,
-		MacAddress sourceMac, IPv4Address sourceIP, int arpTimeout)
+		MacAddress sourceMac, IPv4Address sourceIP, int arpTimeout) const
 {
 	MacAddress result = MacAddress::Zero;
 
@@ -99,7 +94,7 @@ MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* devic
 		closeDeviceAtTheEnd = true;
 		if (!device->open())
 		{
-			LOG_ERROR("Cannot open device");
+			PCPP_LOG_ERROR("Cannot open device");
 			return result;
 		}
 	}
@@ -124,13 +119,13 @@ MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* devic
 
 	if (!arpRequest.addLayer(&ethLayer))
 	{
-		LOG_ERROR("Couldn't build Eth layer for ARP request");
+		PCPP_LOG_ERROR("Couldn't build Eth layer for ARP request");
 		return result;
 	}
 
 	if (!arpRequest.addLayer(&arpLayer))
 	{
-		LOG_ERROR("Couldn't build ARP layer for ARP request");
+		PCPP_LOG_ERROR("Couldn't build ARP layer for ARP request");
 		return result;
 	}
 
@@ -140,7 +135,7 @@ MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* devic
 	ArpFilter arpFilter(ARP_REPLY);
 	if (!device->setFilter(arpFilter))
 	{
-		LOG_ERROR("Couldn't set ARP filter for device");
+		PCPP_LOG_ERROR("Couldn't set ARP filter for device");
 		return result;
 	}
 
@@ -149,18 +144,14 @@ MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* devic
 	// When the ARP response is captured the capture thread signals the main thread and the main thread stops capturing and continues
 	// to the next iteration. If a timeout passes and no ARP response is captured, the main thread stops capturing
 
-	pthread_mutex_t mutex;
-	pthread_cond_t cond;
-
-	// init the conditonal mutex
-	pthread_mutex_init(&mutex, 0);
-	pthread_cond_init(&cond, 0);
+	std::mutex mutex;
+	std::condition_variable cond;
 
 	// this is the token that passes between the 2 threads. It contains pointers to the conditional mutex, the target IP for identifying
 	// the ARP response, the iteration index and a timestamp to calculate the response time
-	ArpingRecievedData data = {
-			&mutex,
-			&cond,
+	ArpingReceivedData data = {
+			mutex,
+			cond,
 			ipAddr,
 			clock(),
 			MacAddress::Zero,
@@ -170,37 +161,25 @@ MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* devic
 	struct timeval now;
 	gettimeofday(&now,NULL);
 
-	// create the timeout
-	timespec timeout = {
-			now.tv_sec + arpTimeout,
-			now.tv_usec
-	};
-
-	// start capturing. The capture is done on another thread, hence "arpPacketRecieved" is running on that thread
-	device->startCapture(arpPacketRecieved, &data);
+	// start capturing. The capture is done on another thread, hence "arpPacketReceived" is running on that thread
+	device->startCapture(arpPacketReceived, &data);
 
 	// send the ARP request
 	device->sendPacket(&arpRequest);
 
-	pthread_mutex_lock(&mutex);
-
 	// block on the conditional mutex until capture thread signals or until timeout expires
-	int res = pthread_cond_timedwait(&cond, &mutex, &timeout);
+	std::unique_lock<std::mutex> lock(mutex);
+	std::cv_status res = cond.wait_for(lock, std::chrono::seconds(arpTimeout));
 
 	// stop the capturing thread
 	device->stopCapture();
 
-	pthread_mutex_unlock(&mutex);
-
 	// check if timeout expired
-	if (res == ETIMEDOUT)
+	if (res == std::cv_status::timeout)
 	{
-		LOG_ERROR("ARP request time out");
+		PCPP_LOG_ERROR("ARP request time out");
 		return result;
 	}
-
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 
 	if (closeDeviceAtTheEnd)
 		device->close();
@@ -215,10 +194,10 @@ MacAddress NetworkUtils::getMacAddress(IPv4Address ipAddr, PcapLiveDevice* devic
 
 
 
-struct DNSRecievedData
+struct DNSReceivedData
 {
-	pthread_mutex_t* mutex;
-	pthread_cond_t* cond;
+	std::mutex &mutex;
+	std::condition_variable &cond;
 	std::string hostname;
 	uint16_t transactionID;
 	clock_t start;
@@ -227,13 +206,13 @@ struct DNSRecievedData
 	double dnsResponseTime;
 };
 
-static void dnsResponseRecieved(RawPacket* rawPacket, PcapLiveDevice* device, void* userCookie)
+static void dnsResponseReceived(RawPacket* rawPacket, PcapLiveDevice* device, void* userCookie)
 {
 	// extract timestamp of packet
-	clock_t recieveTime = clock();
+	clock_t receiveTime = clock();
 
 	// get data from the main thread
-	DNSRecievedData* data = (DNSRecievedData*)userCookie;
+	DNSReceivedData* data = (DNSReceivedData*)userCookie;
 
 	// parse the response packet
 	Packet packet(rawPacket);
@@ -243,14 +222,14 @@ static void dnsResponseRecieved(RawPacket* rawPacket, PcapLiveDevice* device, vo
 		return;
 
 	// extract the DNS layer from the packet
-	DnsLayer* dnsResponseLayer = packet.getLayerOfType<DnsLayer>();
+	DnsLayer* dnsResponseLayer = packet.getLayerOfType<DnsLayer>(true); // lookup in reverse order
 	if (dnsResponseLayer == NULL)
 		return;
 
 	// verify it's the right DNS response
 	if (dnsResponseLayer->getDnsHeader()->queryOrResponse != 1 /* DNS response */
-			|| dnsResponseLayer->getDnsHeader()->numberOfAnswers < htons(1)
-			|| dnsResponseLayer->getDnsHeader()->transactionID != htons(data->transactionID))
+			|| dnsResponseLayer->getDnsHeader()->numberOfAnswers < htobe16(1)
+			|| dnsResponseLayer->getDnsHeader()->transactionID != htobe16(data->transactionID))
 	{
 		return;
 	}
@@ -273,7 +252,7 @@ static void dnsResponseRecieved(RawPacket* rawPacket, PcapLiveDevice* device, vo
 		// if response doesn't contain hostname or cname - return
 		if (dnsAnswer == NULL)
 		{
-			LOG_DEBUG("DNS answer doesn't contain hostname '%s'", hostToFind.c_str());
+			PCPP_LOG_DEBUG("DNS answer doesn't contain hostname '" << hostToFind << "'");
 			return;
 		}
 
@@ -281,26 +260,26 @@ static void dnsResponseRecieved(RawPacket* rawPacket, PcapLiveDevice* device, vo
 		// if answer contains IPv4 resolving - break the loop and return the IP address
 		if (dnsType == DNS_TYPE_A)
 		{
-			LOG_DEBUG("Found IPv4 resolving for hostname '%s'", hostToFind.c_str());
+			PCPP_LOG_DEBUG("Found IPv4 resolving for hostname '" << hostToFind << "'");
 			break;
 		}
 		// if answer contains a cname - continue to search this cname in the packet - hopefully find the IP resolving
 		else if (dnsType == DNS_TYPE_CNAME)
 		{
-			LOG_DEBUG("Got a DNS response for hostname '%s' with CNAME '%s'", hostToFind.c_str(), dnsAnswer->getData()->toString().c_str());
+			PCPP_LOG_DEBUG("Got a DNS response for hostname '" << hostToFind << "' with CNAME '" << dnsAnswer->getData()->toString() << "'");
 			hostToFind = dnsAnswer->getData()->toString();
 		}
 		// if answer is of type other than A or CNAME (for example AAAA - IPv6) - type is not supported - return
 		else
 		{
-			LOG_DEBUG("Got a DNS response with type which is not A or CNAME");
+			PCPP_LOG_DEBUG("Got a DNS response with type which is not A or CNAME");
 			return;
 		}
 	}
 	// if we got here it means an IPv4 resolving was found
 
 	// measure response time
-	clock_t diffticks = recieveTime-data->start;
+	clock_t diffticks = receiveTime-data->start;
 	double diffms = (diffticks*1000.0)/CLOCKS_PER_SEC;
 
 	data->dnsResponseTime = diffms;
@@ -308,14 +287,12 @@ static void dnsResponseRecieved(RawPacket* rawPacket, PcapLiveDevice* device, vo
 	data->ttl = dnsAnswer->getTTL();
 
 	// signal the main thread the ARP reply was received
-	pthread_mutex_lock(data->mutex);
-	pthread_cond_signal(data->cond);
-    pthread_mutex_unlock(data->mutex);
+	data->cond.notify_one();
 }
 
 
 IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* device, double& dnsResponseTimeMS, uint32_t& dnsTTL,
-		int dnsTimeout, IPv4Address dnsServerIP, IPv4Address gatewayIP)
+		int dnsTimeout, IPv4Address dnsServerIP, IPv4Address gatewayIP) const
 {
 	IPv4Address result = IPv4Address::Zero;
 
@@ -326,7 +303,7 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 		closeDeviceAtTheEnd = true;
 		if (!device->open())
 		{
-			LOG_ERROR("Cannot open device");
+			PCPP_LOG_ERROR("Cannot open device");
 			return result;
 		}
 	}
@@ -341,7 +318,7 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 
 	if (!gatewayIP.isValid() || gatewayIP == IPv4Address::Zero)
 	{
-		LOG_ERROR("Gateway address isn't valid or couldn't find default gateway");
+		PCPP_LOG_ERROR("Gateway address isn't valid or couldn't find default gateway");
 		return result;
 	}
 
@@ -351,7 +328,7 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 
 	if (gatewayMacAddress == MacAddress::Zero)
 	{
-		LOG_ERROR("Coulnd't resolve gateway MAC address");
+		PCPP_LOG_ERROR("Couldn't resolve gateway MAC address");
 		return result;
 	}
 
@@ -366,7 +343,7 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 
 	if (!dnsServerIP.isValid())
 	{
-		LOG_ERROR("DNS server IP isn't valid");
+		PCPP_LOG_ERROR("DNS server IP isn't valid");
 		return result;
 	}
 
@@ -380,7 +357,7 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 
 	// randomize source port to a number >= 10000
 	int srcPortLowest = 10000;
-	int srcPortRange = (2^16) - srcPortLowest;
+	int srcPortRange = 65535 - srcPortLowest;
 	uint16_t srcPort = (rand() % srcPortRange) + srcPortLowest;
 	UdpLayer udpLayer(srcPort, DNS_PORT);
 
@@ -388,14 +365,14 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 	DnsLayer dnsLayer;
 
 	// randomize transaction ID
-	uint16_t transactionID = rand() % (2^16);
-	dnsLayer.getDnsHeader()->transactionID = htons(transactionID);
+	uint16_t transactionID = rand() % 65535;
+	dnsLayer.getDnsHeader()->transactionID = htobe16(transactionID);
 	dnsLayer.addQuery(hostname, DNS_TYPE_A, DNS_CLASS_IN);
 
 	// add all layers to packet
 	if (!dnsRequest.addLayer(&ethLayer) || !dnsRequest.addLayer(&ipLayer) || !dnsRequest.addLayer(&udpLayer) || !dnsRequest.addLayer(&dnsLayer))
 	{
-		LOG_ERROR("Couldn't construct DNS query");
+		PCPP_LOG_ERROR("Couldn't construct DNS query");
 		return result;
 	}
 
@@ -405,7 +382,7 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 	PortFilter dnsResponseFilter(53, SRC);
 	if (!device->setFilter(dnsResponseFilter))
 	{
-		LOG_ERROR("Couldn't set DNS respnse filter");
+		PCPP_LOG_ERROR("Couldn't set DNS response filter");
 		return result;
 	}
 
@@ -414,17 +391,13 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 	// When the DNS response are captured the capture thread signals the main thread and the main thread stops capturing and continues
 	// to the next iteration. if a timeout passes and no DNS response is captured, the main thread stops capturing
 
-	pthread_mutex_t mutex;
-	pthread_cond_t cond;
-
-	// init the conditonal mutex
-	pthread_mutex_init(&mutex, 0);
-	pthread_cond_init(&cond, 0);
+	std::mutex mutex;
+	std::condition_variable cond;
 
 	// this is the token that passes between the 2 threads
-	DNSRecievedData data = {
-			&mutex,
-			&cond,
+	DNSReceivedData data = {
+			mutex,
+			cond,
 			hostname,
 			transactionID,
 			clock(),
@@ -437,37 +410,25 @@ IPv4Address NetworkUtils::getIPv4Address(std::string hostname, PcapLiveDevice* d
 	struct timeval now;
 	gettimeofday(&now,NULL);
 
-	// create the timeout
-	timespec timeout = {
-			now.tv_sec + dnsTimeout,
-			now.tv_usec
-	};
-
-	// start capturing. The capture is done on another thread, hence "dnsResponseRecieved" is running on that thread
-	device->startCapture(dnsResponseRecieved, &data);
+	// start capturing. The capture is done on another thread, hence "dnsResponseReceived" is running on that thread
+	device->startCapture(dnsResponseReceived, &data);
 
 	// send the DNS request
 	device->sendPacket(&dnsRequest);
 
-	pthread_mutex_lock(&mutex);
-
 	// block on the conditional mutex until capture thread signals or until timeout expires
-	int res = pthread_cond_timedwait(&cond, &mutex, &timeout);
+	std::unique_lock<std::mutex> lock(mutex);
+	std::cv_status res = cond.wait_for(lock, std::chrono::seconds(dnsTimeout));
 
 	// stop the capturing thread
 	device->stopCapture();
 
-	pthread_mutex_unlock(&mutex);
-
 	// check if timeout expired
-	if (res == ETIMEDOUT)
+	if (res == std::cv_status::timeout)
 	{
-		LOG_ERROR("DNS request time out");
+		PCPP_LOG_ERROR("DNS request time out");
 		return result;
 	}
-
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 
 	if (closeDeviceAtTheEnd)
 		device->close();

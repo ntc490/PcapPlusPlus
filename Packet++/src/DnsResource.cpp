@@ -4,14 +4,7 @@
 #include "Logger.h"
 #include <sstream>
 #include <string.h>
-#if defined(WIN32) || defined(WINx64) || defined(PCAPPP_MINGW_ENV) //for using ntohl, ntohs, etc.
-#include <winsock2.h>
-#elif LINUX
-#include <in.h> //for using ntohl, ntohs, etc.
-#elif MAC_OS_X
-#include <arpa/inet.h> //for using ntohl, ntohs, etc.
-#endif
-
+#include "EndianPortable.h"
 
 namespace pcpp
 {
@@ -21,7 +14,8 @@ IDnsResource::IDnsResource(DnsLayer* dnsLayer, size_t offsetInLayer)
 {
 	char decodedName[256];
 	m_NameLength = decodeName((const char*)getRawData(), decodedName);
-	m_DecodedName = decodedName;
+	if (m_NameLength > 0)
+		m_DecodedName = decodedName;
 }
 
 IDnsResource::IDnsResource(uint8_t* emptyRawData)
@@ -40,6 +34,7 @@ uint8_t* IDnsResource::getRawData() const
 size_t IDnsResource::decodeName(const char* encodedName, char* result, int iteration)
 {
 	size_t encodedNameLength = 0;
+	size_t decodedNameLength = 0;
 	char* resultPtr = result;
 	resultPtr[0] = 0;
 
@@ -48,7 +43,9 @@ size_t IDnsResource::decodeName(const char* encodedName, char* result, int itera
 		return encodedNameLength;
 
 	if (iteration > 20)
+	{
 		return encodedNameLength;
+	}
 
 	uint8_t wordLength = encodedName[0];
 
@@ -58,45 +55,78 @@ size_t IDnsResource::decodeName(const char* encodedName, char* result, int itera
 		// A pointer to another place in the packet
 		if ((wordLength & 0xc0) == 0xc0)
 		{
-			if (curOffsetInLayer + 2 > m_DnsLayer->m_DataLen)
+			if (curOffsetInLayer + 2 > m_DnsLayer->m_DataLen || encodedNameLength > 255)
 				return encodedNameLength;
 
-			uint16_t offsetInLayer = (wordLength & 0x3f)*256 + (0xFF & encodedName[1]);
+			uint16_t offsetInLayer = (wordLength & 0x3f)*256 + (0xFF & encodedName[1]) + m_DnsLayer->m_OffsetAdjustment;
 			if (offsetInLayer < sizeof(dnshdr) || offsetInLayer >= m_DnsLayer->m_DataLen)
 			{
-				LOG_ERROR("DNS parsing error: name pointer is illegal");
+				PCPP_LOG_ERROR("DNS parsing error: name pointer is illegal");
 				return 0;
 			}
 
 			char tempResult[256];
+			memset(tempResult, 0, 256);
 			int i = 0;
 			decodeName((const char*)(m_DnsLayer->m_Data + offsetInLayer), tempResult, iteration+1);
-			while (tempResult[i] != 0)
+			while (tempResult[i] != 0 && decodedNameLength < 255)
 			{
 				resultPtr[0] = tempResult[i++];
 				resultPtr++;
+				decodedNameLength++;
 			}
 
 			resultPtr[0] = 0;
 
-			// in this case the length of the pointer is: 1B for 0xc0 + 1B for the offset itself
+			// in this case the length of the pointer is: 1 byte for 0xc0 + 1 byte for the offset itself
 			return encodedNameLength + sizeof(uint16_t);
 		}
 		else
 		{
-			if (curOffsetInLayer + wordLength + 1 > m_DnsLayer->m_DataLen)
+			// return if next word would be outside of the DNS layer or overflow the buffer behind resultPtr
+			if (curOffsetInLayer + wordLength + 1 > m_DnsLayer->m_DataLen || encodedNameLength + wordLength > 255)
+			{
+				// add the last '\0' to the decoded string
+				if (encodedNameLength == 256)
+				{
+					resultPtr--;
+					decodedNameLength--;
+				}
+				else
+				{
+					encodedNameLength++;
+				}
+
+				resultPtr[0] = 0;
 				return encodedNameLength;
+			}
+
 
 			memcpy(resultPtr, encodedName+1, wordLength);
 			resultPtr += wordLength;
 			resultPtr[0] = '.';
 			resultPtr++;
+			decodedNameLength += wordLength + 1;
 			encodedName += wordLength + 1;
 			encodedNameLength += wordLength + 1;
 
 			curOffsetInLayer = (uint8_t*)encodedName - m_DnsLayer->m_Data;
 			if (curOffsetInLayer + 1 > m_DnsLayer->m_DataLen)
+			{
+				// add the last '\0' to the decoded string
+				if (encodedNameLength == 256)
+				{
+					decodedNameLength--;
+					resultPtr--;
+				}
+				else
+				{
+					encodedNameLength++;
+				}
+
+				resultPtr[0] = 0;
 				return encodedNameLength;
+			}
 
 			wordLength = encodedName[0];
 		}
@@ -108,9 +138,12 @@ size_t IDnsResource::decodeName(const char* encodedName, char* result, int itera
 		result[resultPtr - result - 1] = 0;
 	}
 
-	// add the last '\0' to encodedNameLength
-	resultPtr[0] = 0;
-	encodedNameLength++;
+	if (resultPtr - result < 256)
+	{
+		// add the last '\0' to encodedNameLength
+		resultPtr[0] = 0;
+		encodedNameLength++;
+	}
 
 	return encodedNameLength;
 }
@@ -120,65 +153,65 @@ void IDnsResource::encodeName(const std::string& decodedName, char* result, size
 {
 	resultLen = 0;
 	std::stringstream strstream(decodedName);
-    std::string word;
-    while (getline(strstream, word, '.'))
-    {
-    	// pointer to a different hostname in the packet
-    	if (word[0] == '#')
-    	{
-    		// convert the number from string to int
-    		std::stringstream stream(word.substr(1));
-    		int pointerInPacket = 0;
-    		stream >> pointerInPacket;
+	std::string word;
+	while (getline(strstream, word, '.'))
+	{
+		// pointer to a different hostname in the packet
+		if (word[0] == '#')
+		{
+			// convert the number from string to int
+			std::stringstream stream(word.substr(1));
+			int pointerInPacket = 0;
+			stream >> pointerInPacket;
 
-    		// verify it's indeed a number and that is in the range of [0-255]
-    		if (stream.fail() || pointerInPacket < 0 || pointerInPacket > 0xff)
-    		{
-    			LOG_ERROR("Error encoding the string '%s'", decodedName.c_str());
-    			return;
-    		}
+			// verify it's indeed a number and that is in the range of [0-255]
+			if (stream.fail() || pointerInPacket < 0 || pointerInPacket > 0xff)
+			{
+				PCPP_LOG_ERROR("Error encoding the string '" << decodedName << "'");
+				return;
+			}
 
-    		// set the pointer to the encoded string result
-    		result[0] = (uint8_t)0xc0;
-    		result[1] = (uint8_t)pointerInPacket;
-    		result += 2;
-    		resultLen += 2;
-    		return; // pointer always comes last
-    	}
+			// set the pointer to the encoded string result
+			result[0] = (uint8_t)0xc0;
+			result[1] = (uint8_t)pointerInPacket;
+			result += 2;
+			resultLen += 2;
+			return; // pointer always comes last
+		}
 
-    	result[0] = word.length();
-    	result++;
-    	memcpy(result, word.c_str(), word.length());
-    	result += word.length();
-    	resultLen += word.length() + 1;
-    }
+		result[0] = word.length();
+		result++;
+		memcpy(result, word.c_str(), word.length());
+		result += word.length();
+		resultLen += word.length() + 1;
+	}
 
-    result[0] = 0;
-    resultLen++;
+	result[0] = 0;
+	resultLen++;
 }
 
 
-DnsType IDnsResource::getDnsType()
+DnsType IDnsResource::getDnsType() const
 {
 	uint16_t dnsType = *(uint16_t*)(getRawData() + m_NameLength);
-	return (DnsType)ntohs(dnsType);
+	return (DnsType)be16toh(dnsType);
 }
 
 void IDnsResource::setDnsType(DnsType newType)
 {
-	uint16_t newTypeAsInt = htons((uint16_t)newType);
+	uint16_t newTypeAsInt = htobe16((uint16_t)newType);
 	memcpy(getRawData() + m_NameLength, &newTypeAsInt, sizeof(uint16_t));
 }
 
 DnsClass IDnsResource::getDnsClass() const
 {
 	uint16_t dnsClass = *(uint16_t*)(getRawData() + m_NameLength + sizeof(uint16_t));
-	return (DnsClass)ntohs(dnsClass);
+	return (DnsClass)be16toh(dnsClass);
 }
 
 void IDnsResource::setDnsClass(DnsClass newClass)
 {
-	uint16_t newClassAsInt = htons((uint16_t)newClass);
+	uint16_t newClassAsInt = htobe16((uint16_t)newClass);
 	memcpy(getRawData() + m_NameLength + sizeof(uint16_t), &newClassAsInt, sizeof(uint16_t));
 }
 
@@ -193,7 +226,7 @@ bool IDnsResource::setName(const std::string& newName)
 		{
 			if (!m_DnsLayer->extendLayer(m_OffsetInLayer, encodedNameLen-m_NameLength, this))
 			{
-				LOG_ERROR("Couldn't set name for DNS query, unable to extend layer");
+				PCPP_LOG_ERROR("Couldn't set name for DNS query, unable to extend layer");
 				return false;
 			}
 		}
@@ -201,7 +234,7 @@ bool IDnsResource::setName(const std::string& newName)
 		{
 			if (!m_DnsLayer->shortenLayer(m_OffsetInLayer, m_NameLength-encodedNameLen, this))
 			{
-				LOG_ERROR("Couldn't set name for DNS query, unable to shorten layer");
+				PCPP_LOG_ERROR("Couldn't set name for DNS query, unable to shorten layer");
 				return false;
 			}
 		}
@@ -210,8 +243,8 @@ bool IDnsResource::setName(const std::string& newName)
 	{
 		size_t size = getSize();
 		char* tempData = new char[size];
-		memcpy(tempData, m_ExternalRawData, getSize());
-		memcpy(m_ExternalRawData + encodedNameLen, tempData, getSize());
+		memcpy(tempData, m_ExternalRawData, size);
+		memcpy(m_ExternalRawData + encodedNameLen, tempData, size);
 		delete[] tempData;
 	}
 
@@ -230,43 +263,39 @@ void IDnsResource::setDnsLayer(DnsLayer* dnsLayer, size_t offsetInLayer)
 	m_ExternalRawData = NULL;
 }
 
-uint32_t DnsResource::getTTL()
+uint32_t DnsResource::getTTL() const
 {
 	uint32_t ttl = *(uint32_t*)(getRawData() + m_NameLength + 2*sizeof(uint16_t));
-	return ntohl(ttl);
+	return be32toh(ttl);
 }
 
 void DnsResource::setTTL(uint32_t newTTL)
 {
-	newTTL = htonl(newTTL);
+	newTTL = htobe32(newTTL);
 	memcpy(getRawData() + m_NameLength + 2*sizeof(uint16_t), &newTTL, sizeof(uint32_t));
 }
 
-size_t DnsResource::getDataLength()
+size_t DnsResource::getDataLength() const
 {
 	uint16_t dataLength = *(uint16_t*)(getRawData() + m_NameLength + 2*sizeof(uint16_t) + sizeof(uint32_t));
-	return ntohs(dataLength);
+	return be16toh(dataLength);
 }
 
-DnsResourceDataPtr DnsResource::getData()
+DnsResourceDataPtr DnsResource::getData() const
 {
 	uint8_t* resourceRawData = getRawData() + m_NameLength + 3*sizeof(uint16_t) + sizeof(uint32_t);
 	size_t dataLength = getDataLength();
 
-	DnsType dnsType = getDnsType();
-
-	switch (dnsType)
+	switch (getDnsType())
 	{
 	case DNS_TYPE_A:
 	{
 		return DnsResourceDataPtr(new IPv4DnsResourceData(resourceRawData, dataLength));
-		break;
 	}
 
 	case DNS_TYPE_AAAA:
 	{
 		return DnsResourceDataPtr(new IPv6DnsResourceData(resourceRawData, dataLength));
-		break;
 	}
 
 	case DNS_TYPE_NS:
@@ -274,26 +303,23 @@ DnsResourceDataPtr DnsResource::getData()
 	case DNS_TYPE_DNAM:
 	case DNS_TYPE_PTR:
 	{
-		return DnsResourceDataPtr(new StringDnsResourceData(resourceRawData, dataLength, this));
-		break;
+		return DnsResourceDataPtr(new StringDnsResourceData(resourceRawData, dataLength, const_cast<IDnsResource*>(static_cast<const IDnsResource*>(this))));
 	}
 
 	case DNS_TYPE_MX:
 	{
-		return DnsResourceDataPtr(new MxDnsResourceData(resourceRawData, dataLength, this));
-		break;
+		return DnsResourceDataPtr(new MxDnsResourceData(resourceRawData, dataLength, const_cast<IDnsResource*>(static_cast<const IDnsResource*>(this))));
 	}
 
 	default:
 	{
 		return DnsResourceDataPtr(new GenericDnsResourceData(resourceRawData, dataLength));
-		break;
 	}
 
 	}
 }
 
-size_t DnsResource::getDataOffset()
+size_t DnsResource::getDataOffset() const
 {
 	return (size_t)(m_OffsetInLayer + m_NameLength + 3*sizeof(uint16_t) + sizeof(uint32_t));
 }
@@ -306,7 +332,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 
 	if (data == NULL)
 	{
-		LOG_ERROR("Given data is NULL");
+		PCPP_LOG_ERROR("Given data is NULL");
 		return false;
 	}
 
@@ -316,7 +342,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 	{
 		if (!data->isTypeOf<IPv4DnsResourceData>())
 		{
-			LOG_ERROR("DNS record is of type A but given data isn't of type IPv4DnsResourceData");
+			PCPP_LOG_ERROR("DNS record is of type A but given data isn't of type IPv4DnsResourceData");
 			return false;
 		}
 		break;
@@ -326,7 +352,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 	{
 		if (!data->isTypeOf<IPv6DnsResourceData>())
 		{
-			LOG_ERROR("DNS record is of type AAAA but given data isn't of type IPv6DnsResourceData");
+			PCPP_LOG_ERROR("DNS record is of type AAAA but given data isn't of type IPv6DnsResourceData");
 			return false;
 		}
 		break;
@@ -339,7 +365,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 	{
 		if (!data->isTypeOf<StringDnsResourceData>())
 		{
-			LOG_ERROR("DNS record is of type NS, CNAME, DNAM or PTR but given data isn't of type StringDnsResourceData");
+			PCPP_LOG_ERROR("DNS record is of type NS, CNAME, DNAM or PTR but given data isn't of type StringDnsResourceData");
 			return false;
 		}
 		break;
@@ -349,7 +375,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 	{
 		if (!data->isTypeOf<MxDnsResourceData>())
 		{
-			LOG_ERROR("DNS record is of type MX but given data isn't of type MxDnsResourceData");
+			PCPP_LOG_ERROR("DNS record is of type MX but given data isn't of type MxDnsResourceData");
 			return false;
 		}
 		break;
@@ -365,7 +391,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 	// convert the IDnsResourceData to byte array
 	if (!data->toByteArr(dataAsByteArr, dataLength, this))
 	{
-		LOG_ERROR("Cannot convert DNS resource data to byte array, data is probably invalid");
+		PCPP_LOG_ERROR("Cannot convert DNS resource data to byte array, data is probably invalid");
 		return false;
 	}
 
@@ -379,7 +405,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 		{
 			if (!m_DnsLayer->extendLayer(m_OffsetInLayer + dataOffset, dataLength-curLength, this))
 			{
-				LOG_ERROR("Couldn't set data for DNS query, unable to extend layer");
+				PCPP_LOG_ERROR("Couldn't set data for DNS query, unable to extend layer");
 				return false;
 			}
 		}
@@ -387,7 +413,7 @@ bool DnsResource::setData(IDnsResourceData* data)
 		{
 			if (!m_DnsLayer->shortenLayer(m_OffsetInLayer + dataOffset, curLength-dataLength, this))
 			{
-				LOG_ERROR("Couldn't set data for DNS query, unable to shorten layer");
+				PCPP_LOG_ERROR("Couldn't set data for DNS query, unable to shorten layer");
 				return false;
 			}
 		}
@@ -396,16 +422,16 @@ bool DnsResource::setData(IDnsResourceData* data)
 	// write data to resource
 	memcpy(getRawData() + dataOffset, dataAsByteArr, dataLength);
 	//update data length in resource
-	dataLength = htons(dataLength);
+	dataLength = htobe16((uint16_t)dataLength);
 	memcpy(getRawData() + dataLengthOffset, &dataLength, sizeof(uint16_t));
 
 	return true;
 }
 
-uint16_t DnsResource::getCustomDnsClass()
+uint16_t DnsResource::getCustomDnsClass() const
 {
 	uint16_t value = *(uint16_t*)(getRawData() + m_NameLength + sizeof(uint16_t));
-	return ntohs(value);
+	return be16toh(value);
 }
 
 void DnsResource::setCustomDnsClass(uint16_t customValue)

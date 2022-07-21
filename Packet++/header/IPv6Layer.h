@@ -2,6 +2,7 @@
 #define PACKETPP_IPV6_LAYER
 
 #include "Layer.h"
+#include "IPLayer.h"
 #include "IPv6Extensions.h"
 #include "IpAddress.h"
 
@@ -19,17 +20,18 @@ namespace pcpp
 	 * Represents IPv6 protocol header
 	 */
 #pragma pack(push, 1)
-	struct ip6_hdr {
+	struct ip6_hdr
+	{
 		#if (BYTE_ORDER == LITTLE_ENDIAN)
 		/** Traffic class */
 		uint8_t trafficClass:4,
 		/** IP version number, has the value of 6 for IPv6 */
-				ipVersion:4;
+		ipVersion:4;
 		#else
 		/** IP version number, has the value of 6 for IPv6 */
 		uint8_t ipVersion:4,
 		/** Traffic class */
-				trafficClass:4;
+		trafficClass:4;
 		#endif
 		/** Flow label */
 		uint8_t flowLabel[3];
@@ -51,7 +53,7 @@ namespace pcpp
 	 * @class IPv6Layer
 	 * Represents an IPv6 protocol layer
 	 */
-	class IPv6Layer : public Layer
+	class IPv6Layer : public Layer, public IPLayer
 	{
 	public:
 		/**
@@ -81,7 +83,7 @@ namespace pcpp
 		IPv6Layer(const IPv6Layer& other);
 
 		/**
-		 * A destrcutor for this layer
+		 * A destructor for this layer
 		 */
 		~IPv6Layer();
 
@@ -94,24 +96,51 @@ namespace pcpp
 		 * Get a pointer to the IPv6 header. Notice this points directly to the data, so every change will change the actual packet data
 		 * @return A pointer to the @ref ip6_hdr
 		 */
-		inline ip6_hdr* getIPv6Header() { return (ip6_hdr*)m_Data; }
+		ip6_hdr* getIPv6Header() const { return (ip6_hdr*)m_Data; }
+
+		/**
+		 * Get the source IP address in the form of IPAddress. This method is very similar to getSrcIPv6Address(),
+		 * but adds a level of abstraction because IPAddress can be used for both IPv4 and IPv6 addresses
+		 * @return An IPAddress containing the source address
+		 */
+		IPAddress getSrcIPAddress() const { return getSrcIPv6Address(); }
 
 		/**
 		 * Get the source IP address in the form of IPv6Address
 		 * @return An IPv6Address containing the source address
 		 */
-		inline IPv6Address getSrcIpAddress() { return IPv6Address(getIPv6Header()->ipSrc); }
+		IPv6Address getSrcIPv6Address() const { return getIPv6Header()->ipSrc; }
+
+		/**
+		 * Set the source IP address
+		 * @param[in] ipAddr The IP address to set
+		 */
+		void setSrcIPv6Address(const IPv6Address& ipAddr) { ipAddr.copyTo(getIPv6Header()->ipSrc); }
+
+
+		/**
+		 * Set the dest IP address
+		 * @param[in] ipAddr The IP address to set
+		 */
+		void setDstIPv6Address(const IPv6Address& ipAddr) { ipAddr.copyTo(getIPv6Header()->ipDst); }
+
+		/**
+		 * Get the destination IP address in the form of IPAddress. This method is very similar to getDstIPv6Address(),
+		 * but adds a level of abstraction because IPAddress can be used for both IPv4 and IPv6 addresses
+		 * @return An IPAddress containing the destination address
+		 */
+		IPAddress getDstIPAddress() const { return getDstIPv6Address(); }
 
 		/**
 		 * Get the destination IP address in the form of IPv6Address
 		 * @return An IPv6Address containing the destination address
 		 */
-		inline IPv6Address getDstIpAddress() { return IPv6Address(getIPv6Header()->ipDst); }
+		IPv6Address getDstIPv6Address() const { return getIPv6Header()->ipDst; }
 
 		/**
 		 * @return Number of IPv6 extensions in this layer
 		 */
-		size_t getExtensionCount();
+		size_t getExtensionCount() const;
 
 		/**
 		 * A templated getter for an IPv6 extension of a type TIPv6Extension. TIPv6Extension has to be one of the supported IPv6 extensions,
@@ -119,7 +148,7 @@ namespace pcpp
 		 * @return A pointer to the extension instance or NULL if the requested extension type isn't found
 		 */
 		template<class TIPv6Extension>
-		TIPv6Extension* getExtensionOfType();
+		TIPv6Extension* getExtensionOfType() const;
 
 		/**
 		 * Add a new extension of type TIPv6Extension to the layer. This is a templated method and TIPv6Extension has to be one of
@@ -141,20 +170,37 @@ namespace pcpp
 		/**
 		 * @return True if this packet is an IPv6 fragment, meaning if it has an IPv6FragmentationHeader extension
 		 */
-		bool isFragment();
+		bool isFragment() const;
+
+		/**
+		 * The static method makes validation of input data
+		 * @param[in] data The pointer to the beginning of byte stream of IP packet
+		 * @param[in] dataLen The length of byte stream
+		 * @return True if the data is valid and can represent the IPv6 packet
+		 */
+		static inline bool isDataValid(const uint8_t* data, size_t dataLen);
 
 
 		// implement abstract methods
 
 		/**
-		 * Currently identifies the following next layers: UdpLayer, TcpLayer. Otherwise sets PayloadLayer
+		 * Currently identifies the following next layers:
+		 * - UdpLayer
+		 * - TcpLayer
+		 * - IPv4Layer (IP-in-IP)
+		 * - IPv6Layer (IP-in-IP)
+		 * - GreLayer
+		 * - AuthenticationHeaderLayer (IPSec)
+		 * - ESPLayer (IPSec)
+		 *
+		 * Otherwise sets PayloadLayer
 		 */
 		void parseNextLayer();
 
 		/**
 		 * @return Size of @ref ip6_hdr
 		 */
-		inline size_t getHeaderLen() { return sizeof(ip6_hdr) + m_ExtensionsLen; }
+		size_t getHeaderLen() const { return sizeof(ip6_hdr) + m_ExtensionsLen; }
 
 		/**
 		 * Calculate the following fields:
@@ -164,7 +210,7 @@ namespace pcpp
 		 */
 		void computeCalculateFields();
 
-		std::string toString();
+		std::string toString() const;
 
 		OsiModelLayer getOsiModelLayer() const { return OsiModelNetworkLayer; }
 
@@ -180,7 +226,7 @@ namespace pcpp
 
 
 	template<class TIPv6Extension>
-	TIPv6Extension* IPv6Layer::getExtensionOfType()
+	TIPv6Extension* IPv6Layer::getExtensionOfType() const
 	{
 		IPv6Extension* curExt = m_FirstExtension;
 		while (curExt != NULL && dynamic_cast<TIPv6Extension*>(curExt) == NULL)
@@ -219,6 +265,13 @@ namespace pcpp
 		m_ExtensionsLen += newHeader->getExtensionLen();
 
 		return newHeader;
+	}
+
+	// implementation of inline methods
+
+	bool IPv6Layer::isDataValid(const uint8_t* data, size_t dataLen)
+	{
+		return dataLen >= sizeof(ip6_hdr);
 	}
 
 } // namespace pcpp

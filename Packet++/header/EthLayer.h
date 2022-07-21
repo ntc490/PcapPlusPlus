@@ -15,10 +15,11 @@ namespace pcpp
 
 	/**
 	 * @struct ether_header
-	 * Represents an Ethernet header
+	 * Represents an Ethernet II header
 	 */
 #pragma pack(push, 1)
-	struct ether_header {
+	struct ether_header
+	{
 		/** Destination MAC */
 		uint8_t dstMac[6];
 		/** Source MAC */
@@ -30,41 +31,43 @@ namespace pcpp
 
 	/* Ethernet protocol ID's */
 
-	/** Xerox PUP */
-#define	PCPP_ETHERTYPE_PUP		0x0200
-	/** Sprite */
-#define PCPP_ETHERTYPE_SPRITE	0x0500
 	/** IP */
-#define	PCPP_ETHERTYPE_IP		0x0800
+#define PCPP_ETHERTYPE_IP            0x0800
 	/** Address resolution */
-#define	PCPP_ETHERTYPE_ARP		0x0806
+#define PCPP_ETHERTYPE_ARP           0x0806
+	/** Transparent Ethernet Bridging */
+#define PCPP_ETHERTYPE_ETHBRIDGE 0x6558
 	/** Reverse ARP */
-#define	PCPP_ETHERTYPE_REVARP	0x8035
+#define PCPP_ETHERTYPE_REVARP        0x8035
 	/** AppleTalk protocol */
-#define PCPP_ETHERTYPE_AT		0x809B
+#define PCPP_ETHERTYPE_AT            0x809B
 	/** AppleTalk ARP */
-#define PCPP_ETHERTYPE_AARP		0x80F3
+#define PCPP_ETHERTYPE_AARP          0x80F3
 	/** IEEE 802.1Q VLAN tagging */
-#define	PCPP_ETHERTYPE_VLAN		0x8100
+#define PCPP_ETHERTYPE_VLAN          0x8100
 	/** IPX */
-#define PCPP_ETHERTYPE_IPX		0x8137
+#define PCPP_ETHERTYPE_IPX           0x8137
 	/** IP protocol version 6 */
-#define	PCPP_ETHERTYPE_IPV6		0x86dd
+#define PCPP_ETHERTYPE_IPV6          0x86dd
 	/** used to test interfaces */
-#define PCPP_ETHERTYPE_LOOPBACK	0x9000
+#define PCPP_ETHERTYPE_LOOPBACK      0x9000
 	/** PPPoE discovery */
-#define PCPP_ETHERTYPE_PPPOED	0x8863
+#define PCPP_ETHERTYPE_PPPOED        0x8863
 	/** PPPoE session */
-#define PCPP_ETHERTYPE_PPPOES	0x8864
+#define PCPP_ETHERTYPE_PPPOES        0x8864
 	/** MPLS */
-#define PCPP_ETHERTYPE_MPLS		0x8847
+#define PCPP_ETHERTYPE_MPLS          0x8847
 	/** Point-to-point protocol (PPP) */
-#define PCPP_ETHERTYPE_PPP		0x880B
+#define PCPP_ETHERTYPE_PPP           0x880B
+	/** RDMA over Converged Ethernet (RoCEv1) */
+#define PCPP_ETHERTYPE_ROCEV1        0x8915
+	/** IEEE 802.1ad Provider Bridge, Q-in-Q */
+#define PCPP_ETHERTYPE_IEEE_802_1AD  0x88A8
 
 
 	/**
 	 * @class EthLayer
-	 * Represents an Ethernet protocol layer
+	 * Represents an Ethernet II protocol layer
 	 */
 	class EthLayer : public Layer
 	{
@@ -124,7 +127,7 @@ namespace pcpp
 		 * Set destination MAC address
 		 * @param destMac Destination MAC to set
 		 */
-		void setDestMac(const MacAddress& destMac) { destMac.copyTo(getEthHeader()->dstMac); }
+		inline void setDestMac(const MacAddress& destMac) { destMac.copyTo(getEthHeader()->dstMac); }
 
 		// implement abstract methods
 
@@ -138,16 +141,24 @@ namespace pcpp
 		/**
 		 * @return Size of ether_header
 		 */
-		inline size_t getHeaderLen() { return sizeof(ether_header); }
+		size_t getHeaderLen() const { return sizeof(ether_header); }
 
 		/**
 		 * Calculate ether_header#etherType for known protocols: IPv4, IPv6, ARP, VLAN
 		 */
 		void computeCalculateFields();
 
-		std::string toString();
+		std::string toString() const;
 
 		OsiModelLayer getOsiModelLayer() const { return OsiModelDataLinkLayer; }
+
+		/**
+		 * A static method that validates the input data
+		 * @param[in] data The pointer to the beginning of a byte stream of an Ethernet II packet
+		 * @param[in] dataLen The length of the byte stream
+		 * @return True if the data is valid and can represent an Ethernet II packet
+		 */
+		static bool isDataValid(const uint8_t* data, size_t dataLen);
 	};
 
 } // namespace pcpp

@@ -9,7 +9,6 @@
 #include "PacketUtils.h"
 #include "SystemUtils.h"
 
-
 /**
  * An auxiliary struct for encapsulating rate stats
  */
@@ -110,14 +109,14 @@ struct HttpResponseStats : HttpMessageStats
 	std::map<std::string, int> statusCodeCount; // a map for counting the different status codes seen in traffic
 	std::map<std::string, int> contentTypeCount; // a map for counting the content-types seen in traffic
 	int numOfMessagesWithContentLength; // total number of responses containing the "content-length" field
-	int totalConentLengthSize; // total body size extracted by responses containing "content-length" field
+	int totalContentLengthSize; // total body size extracted by responses containing "content-length" field
 	double averageContentLengthSize; // average body size
 
 	void clear()
 	{
 		HttpMessageStats::clear();
 		numOfMessagesWithContentLength = 0;
-		totalConentLengthSize = 0;
+		totalContentLengthSize = 0;
 		averageContentLengthSize = 0;
 		statusCodeCount.clear();
 		contentTypeCount.clear();
@@ -135,9 +134,10 @@ public:
 	/**
 	 * C'tor - clear all structures
 	 */
-	HttpStatsCollector()
+	HttpStatsCollector(uint16_t dstPort)
 	{
 		clear();
+		m_DstPort = dstPort;
 	}
 
 	/**
@@ -151,7 +151,7 @@ public:
 
 		// verify packet is port 80
 		pcpp::TcpLayer* tcpLayer = httpPacket->getLayerOfType<pcpp::TcpLayer>();
-		if (!(tcpLayer->getTcpHeader()->portDst == htons(80) || tcpLayer->getTcpHeader()->portSrc == htons(80)))
+		if (!(tcpLayer->getDstPort() == m_DstPort || tcpLayer->getSrcPort() == m_DstPort))
 			return;
 
 		// collect general HTTP traffic stats on this packet
@@ -326,7 +326,7 @@ private:
 		{
 			// if new packet seq number is smaller than previous seen seq number current it means this packet is
 			// a re-transmitted packet and should be ignored
-			if (m_FlowTable[flowKey].curSeqNumberRequests >= ntohl(tcpLayer->getTcpHeader()->sequenceNumber))
+			if (m_FlowTable[flowKey].curSeqNumberRequests >= pcpp::netToHost32(tcpLayer->getTcpHeader()->sequenceNumber))
 				return;
 
 			// a new request - increase num of open transactions
@@ -344,13 +344,13 @@ private:
 			m_FlowTable[flowKey].lastSeenMessage = pcpp::HTTPRequest;
 
 			// set last seen sequence number
-			m_FlowTable[flowKey].curSeqNumberRequests = ntohl(tcpLayer->getTcpHeader()->sequenceNumber);
+			m_FlowTable[flowKey].curSeqNumberRequests = pcpp::netToHost32(tcpLayer->getTcpHeader()->sequenceNumber);
 		}
 		else if (message->getProtocol() == pcpp::HTTPResponse)
 		{
 			// if new packet seq number is smaller than previous seen seq number current it means this packet is
 			// a re-transmitted packet and should be ignored
-			if (m_FlowTable[flowKey].curSeqNumberResponses >= ntohl(tcpLayer->getTcpHeader()->sequenceNumber))
+			if (m_FlowTable[flowKey].curSeqNumberResponses >= pcpp::netToHost32(tcpLayer->getTcpHeader()->sequenceNumber))
 				return;
 
 			// a response - decrease num of open transactions
@@ -378,7 +378,7 @@ private:
 			}
 
 			// set last seen sequence number
-			m_FlowTable[flowKey].curSeqNumberResponses = ntohl(tcpLayer->getTcpHeader()->sequenceNumber);
+			m_FlowTable[flowKey].curSeqNumberResponses = pcpp::netToHost32(tcpLayer->getTcpHeader()->sequenceNumber);
 		}
 	}
 
@@ -417,9 +417,9 @@ private:
 		if (contentLengthField != NULL)
 		{
 			m_ResponseStats.numOfMessagesWithContentLength++;
-			m_ResponseStats.totalConentLengthSize += atoi(contentLengthField->getFieldValue().c_str());
+			m_ResponseStats.totalContentLengthSize += atoi(contentLengthField->getFieldValue().c_str());
 			if (m_ResponseStats.numOfMessagesWithContentLength != 0)
-				m_ResponseStats.averageContentLengthSize = (double)m_ResponseStats.totalConentLengthSize / (double)m_ResponseStats.numOfMessagesWithContentLength;
+				m_ResponseStats.averageContentLengthSize = (double)m_ResponseStats.totalContentLengthSize / (double)m_ResponseStats.numOfMessagesWithContentLength;
 		}
 
 		// extract content-type and add to content-type map
@@ -465,4 +465,5 @@ private:
 
 	double m_LastCalcRateTime;
 	double m_StartTime;
+	uint16_t m_DstPort;
 };

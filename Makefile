@@ -9,6 +9,7 @@ PACKETPP_HOME        := Packet++
 PCAPPP_HOME          := Pcap++
 PACKETPP_TEST        := Tests/Packet++Test
 PCAPPP_TEST          := Tests/Pcap++Test
+FUZZERS_HOME         := Tests/Fuzzers
 EXAMPLE_ARPSPOOF     := Examples/ArpSpoofing
 EXAMPLE_ARPING       := Examples/Arping
 EXAMPLE_DPDK1        := Examples/DpdkExample-FilterTraffic
@@ -24,7 +25,9 @@ EXAMPLE_ICMP_FT      := Examples/IcmpFileTransfer
 EXAMPLE_TCP_REASM    := Examples/TcpReassembly
 EXAMPLE_IP_FRAG      := Examples/IPFragUtil
 EXAMPLE_IP_DEFRAG    := Examples/IPDefragUtil
+EXAMPLE_TLS_FP       := Examples/TLSFingerprinting
 EXAMPLE_DPDK2        := Examples/DpdkBridge
+EXAMPLE_KNI_PONG     := Examples/KniPong
 
 
 UNAME := $(shell uname)
@@ -48,15 +51,16 @@ all: libs
 	@cd $(EXAMPLE_TCP_REASM)         && $(MAKE) TcpReassembly
 	@cd $(EXAMPLE_IP_FRAG)           && $(MAKE) IPFragUtil
 	@cd $(EXAMPLE_IP_DEFRAG)         && $(MAKE) IPDefragUtil
+	@cd $(EXAMPLE_TLS_FP)            && $(MAKE) TLSFingerprinting
 ifdef USE_DPDK
 	@cd $(EXAMPLE_DPDK1)             && $(MAKE) DpdkTrafficFilter
 	@cd $(EXAMPLE_DPDK2)             && $(MAKE) DpdkBridge
+	@cd $(EXAMPLE_KNI_PONG)          && $(MAKE) KniPong
 endif
 ifdef PF_RING_HOME
 	@cd $(EXAMPLE_PF_RING1)          && $(MAKE) PfRingTrafficFilter
 endif
 	@$(MKDIR) -p Dist/examples
-	@$(MKDIR) -p Dist/mk
 	$(CP) $(EXAMPLE_ARPSPOOF)/Bin/* ./Dist/examples
 	$(CP) $(EXAMPLE_ARPING)/Bin/* ./Dist/examples
 	$(CP) $(EXAMPLE_DNSSPOOF)/Bin/* ./Dist/examples
@@ -68,17 +72,18 @@ endif
 	$(CP) $(EXAMPLE_PCAPSEARCH)/Bin/* ./Dist/examples
 	$(CP) $(EXAMPLE_ICMP_FT)/Bin/* ./Dist/examples
 	$(CP) $(EXAMPLE_TCP_REASM)/Bin/* ./Dist/examples
-	$(CP) $(EXAMPLE_IP_FRAG)/Bin/* ./Dist/examples	
-	$(CP) $(EXAMPLE_IP_DEFRAG)/Bin/* ./Dist/examples	
+	$(CP) $(EXAMPLE_IP_FRAG)/Bin/* ./Dist/examples
+	$(CP) $(EXAMPLE_IP_DEFRAG)/Bin/* ./Dist/examples
+	$(CP) $(EXAMPLE_TLS_FP)/Bin/* ./Dist/examples
 ifdef USE_DPDK
 	$(CP) $(EXAMPLE_DPDK1)/Bin/* ./Dist/examples
 	$(CP) $(EXAMPLE_DPDK2)/Bin/* ./Dist/examples
+	$(CP) $(EXAMPLE_KNI_PONG)/Bin/* ./Dist/examples
 endif
 ifdef PF_RING_HOME
 	$(CP) $(EXAMPLE_PF_RING1)/Bin/* ./Dist/examples
 endif
-	$(CP) mk/PcapPlusPlus.mk ./Dist/mk
-	@echo 'Finished successfully building PcapPlusPlus'
+	@echo Finished successfully building PcapPlusPlus
 
 # PcapPlusPlus libs only
 libs:
@@ -94,8 +99,14 @@ libs:
 	@$(CP) $(COMMONPP_HOME)/header/* ./Dist/header
 	@$(CP) $(PACKETPP_HOME)/header/* ./Dist/header
 	@$(CP) $(PCAPPP_HOME)/header/* ./Dist/header
-	@echo 'Finished successfully building PcapPlusPlus libs'
+	@$(MKDIR) -p Dist/mk
+	$(CP) mk/PcapPlusPlus.mk ./Dist/mk
+	@echo Finished successfully building PcapPlusPlus libs
 	@echo ' '
+
+# PcapPlusPlus with fuzzers
+fuzzers: libs
+	@cd $(FUZZERS_HOME)              && $(MAKE)
 
 # Clean
 clean:
@@ -117,16 +128,19 @@ clean:
 	@cd $(EXAMPLE_TCP_REASM)         && $(MAKE) clean
 	@cd $(EXAMPLE_IP_FRAG)           && $(MAKE) clean
 	@cd $(EXAMPLE_IP_DEFRAG)         && $(MAKE) clean
+	@cd $(EXAMPLE_TLS_FP)            && $(MAKE) clean
+	@cd $(FUZZERS_HOME)              && $(MAKE) clean
 ifdef USE_DPDK
 	@cd $(EXAMPLE_DPDK1)             && $(MAKE) clean
 	@cd $(EXAMPLE_DPDK2)             && $(MAKE) clean
+	@cd $(EXAMPLE_KNI_PONG)          && $(MAKE) clean
 endif
 ifdef PF_RING_HOME
 	@cd $(EXAMPLE_PF_RING1)          && $(MAKE) clean
 endif
 
 	@$(RM) -rf Dist
-	@echo 'Finished successfully cleaning PcapPlusPlus'
+	@echo Finished successfully cleaning PcapPlusPlus
 
 ifndef WIN32
 INSTALL_DIR=Dist

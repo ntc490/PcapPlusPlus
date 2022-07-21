@@ -98,7 +98,7 @@ namespace pcpp
 			PacketKey() {}
 
 			// private copy c'tor
-			PacketKey(const PacketKey& other);
+			PacketKey(const PacketKey& other) {}
 		};
 
 
@@ -125,8 +125,21 @@ namespace pcpp
 
 			/**
 			 * A copy c'tor for this class
+			 * @param[in] other The instance to copy from
 			 */
-			IPv4PacketKey(const IPv4PacketKey& other) : m_IpID(other.m_IpID), m_SrcIP(other.m_SrcIP), m_DstIP(other.m_DstIP) { }
+			IPv4PacketKey(const IPv4PacketKey& other) : PacketKey(other), m_IpID(other.m_IpID), m_SrcIP(other.m_SrcIP), m_DstIP(other.m_DstIP) { }
+
+			/**
+			 * Assignment operator for this class
+			 * @param[in] other The instance to assign from
+			 */
+			IPv4PacketKey& operator=(const IPv4PacketKey& other)
+			{
+				m_IpID = other.m_IpID;
+				m_SrcIP = other.m_SrcIP;
+				m_DstIP = other.m_DstIP;
+				return *this;
+			}
 
 			/**
 			 * @return IP ID value
@@ -204,8 +217,21 @@ namespace pcpp
 
 			/**
 			 * A copy c'tor for this class
+			 * @param[in] other The instance to copy from
 			 */
-			IPv6PacketKey(const IPv6PacketKey& other) : m_FragmentID(other.m_FragmentID), m_SrcIP(other.m_SrcIP), m_DstIP(other.m_DstIP) { }
+			IPv6PacketKey(const IPv6PacketKey& other) : PacketKey(other), m_FragmentID(other.m_FragmentID), m_SrcIP(other.m_SrcIP), m_DstIP(other.m_DstIP) { }
+
+			/**
+			 * Assignment operator for this class
+			 * @param[in] other The instance to assign from
+			 */
+			IPv6PacketKey& operator=(const IPv6PacketKey& other)
+			{
+				m_FragmentID = other.m_FragmentID;
+				m_SrcIP = other.m_SrcIP;
+				m_SrcIP = other.m_DstIP;
+				return *this;
+			}
 
 			/**
 			 * @return Fragment ID value
@@ -298,7 +324,8 @@ namespace pcpp
 		 * onFragmentsCleanCallback. This parameter is optional, default cookie is NULL
 		 * @param[in] maxPacketsToStore Set the capacity limit of the IP reassembly mechanism. Default capacity is #PCPP_IP_REASSEMBLY_DEFAULT_MAX_PACKETS_TO_STORE
 		 */
-		IPReassembly(OnFragmentsClean onFragmentsCleanCallback = NULL, void* callbackUserCookie = NULL, size_t maxPacketsToStore = PCPP_IP_REASSEMBLY_DEFAULT_MAX_PACKETS_TO_STORE);
+		IPReassembly(OnFragmentsClean onFragmentsCleanCallback = NULL, void *callbackUserCookie = NULL, size_t maxPacketsToStore = PCPP_IP_REASSEMBLY_DEFAULT_MAX_PACKETS_TO_STORE)
+			: m_PacketLRU(maxPacketsToStore), m_OnFragmentsCleanCallback(onFragmentsCleanCallback), m_CallbackUserCookie(callbackUserCookie) {}
 
 		/**
 		 * A d'tor for this class
@@ -385,7 +412,7 @@ namespace pcpp
 		/**
 		 * Get the maximum capacity as determined in the c'tor
 		 */
-		size_t getMaxCapacity() const { return (int)m_PacketLRU->getMaxSize(); }
+		size_t getMaxCapacity() const { return m_PacketLRU.getMaxSize(); }
 
 		/**
 		 * Get the current number of packets being processed
@@ -416,7 +443,7 @@ namespace pcpp
 			~IPFragmentData() { delete packetKey; if (deleteData && data != NULL) { delete data; } }
 		};
 
-		LRUList<uint32_t>* m_PacketLRU;
+		LRUList<uint32_t> m_PacketLRU;
 		std::map<uint32_t, IPFragmentData*> m_FragmentMap;
 		OnFragmentsClean m_OnFragmentsCleanCallback;
 		void* m_CallbackUserCookie;

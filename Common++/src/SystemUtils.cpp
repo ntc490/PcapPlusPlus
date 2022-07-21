@@ -1,18 +1,31 @@
 #include "SystemUtils.h"
-#include "PlatformSpecificUtils.h"
+#include "EndianPortable.h"
+
 #ifndef _MSC_VER
 #include <unistd.h>
 #endif
-#include <stdio.h>
 #include <iostream>
+#include <mutex>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#ifdef MAC_OS_X
+#if defined(__APPLE__)
 #include <mach/clock.h>
 #include <mach/mach.h>
 #endif
 
+#if defined(_WIN32)
+#define POPEN _popen
+#else
+#define POPEN popen
+#endif
+
+#if defined(_WIN32)
+#define PCLOSE _pclose
+#else
+#define PCLOSE pclose
+#endif
 
 #ifdef _MSC_VER
 int gettimeofday(struct timeval * tp, struct timezone * tzp)
@@ -110,7 +123,7 @@ const SystemCore SystemCores::IdToSystemCore[MAX_NUM_OF_CORES] =
 
 int getNumOfCores()
 {
-#ifdef WIN32
+#if defined(_WIN32)
 	SYSTEM_INFO sysinfo;
 	GetSystemInfo( &sysinfo );
 	return sysinfo.dwNumberOfProcessors;
@@ -174,7 +187,8 @@ std::string executeShellCommand(const std::string command)
 	if (!pipe) return "ERROR";
 	char buffer[128];
 	std::string result = "";
-	while(!feof(pipe)) {
+	while(!feof(pipe))
+	{
 		if(fgets(buffer, 128, pipe) != NULL)
 			result += buffer;
 	}
@@ -201,9 +215,9 @@ int clockGetTime(long& sec, long& nsec)
 	sec = 0;
 	nsec = 0;
 
-#if defined(WIN32) || defined(WINx64) || defined(PCAPPP_MINGW_ENV)
+#if defined(_WIN32)
 
-	#define CLOCK_GETTIME_BILLION (1E9)
+#define CLOCK_GETTIME_BILLION (1E9)
 
 	static BOOL clock_gettime_first_time = 1;
 	static LARGE_INTEGER clock_gettime_counts_per_sec;
@@ -230,7 +244,7 @@ int clockGetTime(long& sec, long& nsec)
 
 	return 0;
 
-#elif MAC_OS_X
+#elif defined(__APPLE__)
 
 	clock_serv_t cclock;
 	mach_timespec_t mts;
@@ -258,12 +272,49 @@ int clockGetTime(long& sec, long& nsec)
 #endif
 }
 
+void multiPlatformSleep(uint32_t seconds)
+{
+#if defined(_WIN32)
+	Sleep(seconds*1000);
+#else
+	sleep(seconds);
+#endif
+}
+
+void multiPlatformMSleep(uint32_t milliseconds)
+{
+#if defined(_WIN32)
+	Sleep(milliseconds);
+#else
+	usleep(milliseconds*1000);
+#endif
+}
+
+uint16_t hostToNet16(uint16_t host)
+{
+	return htobe16(host);
+}
+
+uint16_t netToHost16(uint16_t net)
+{
+	return be16toh(net);
+}
+
+uint32_t hostToNet32(uint32_t host)
+{
+	return htobe32(host);
+}
+
+uint32_t netToHost32(uint32_t net)
+{
+	return be32toh(net);
+}
+
 
 std::string AppName::m_AppName;
 
-
-#ifdef WIN32
-BOOL WINAPI ApplicationEventHandler::handlerRoutine(DWORD fdwCtrlType)
+#if defined(_WIN32)
+int ApplicationEventHandler::handlerRoutine(unsigned long fdwCtrlType)
 {
 	switch (fdwCtrlType)
 	{
@@ -282,6 +333,8 @@ BOOL WINAPI ApplicationEventHandler::handlerRoutine(DWORD fdwCtrlType)
 }
 #else
 
+static std::mutex UnixLinuxHandlerRoutineMutex;
+
 void ApplicationEventHandler::handlerRoutine(int signum)
 {
 	switch (signum)
@@ -291,14 +344,13 @@ void ApplicationEventHandler::handlerRoutine(int signum)
 		// Most calls are unsafe in a signal handler, and this includes printf(). In particular,
 		// if the signal is caught while inside printf() it may be called twice at the same time which might not be a good idea
 		// The way to make sure the signal is called only once is using this lock and putting NULL in m_ApplicationInterruptedHandler
-		pthread_mutex_lock(&ApplicationEventHandler::getInstance().m_HandlerRoutineMutex);
+		const std::lock_guard<std::mutex> lock(UnixLinuxHandlerRoutineMutex);
 
 		if (ApplicationEventHandler::getInstance().m_ApplicationInterruptedHandler != NULL)
 			ApplicationEventHandler::getInstance().m_ApplicationInterruptedHandler(ApplicationEventHandler::getInstance().m_ApplicationInterruptedCookie);
 
 		ApplicationEventHandler::getInstance().m_ApplicationInterruptedHandler = NULL;
 
-		pthread_mutex_unlock(&ApplicationEventHandler::getInstance().m_HandlerRoutineMutex);
 		return;
 	}
 	default:
@@ -313,9 +365,6 @@ void ApplicationEventHandler::handlerRoutine(int signum)
 ApplicationEventHandler::ApplicationEventHandler() :
 		 m_ApplicationInterruptedHandler(NULL), m_ApplicationInterruptedCookie(NULL)
 {
-#ifndef WIN32
-	pthread_mutex_init(&m_HandlerRoutineMutex, 0);
-#endif
 }
 
 void ApplicationEventHandler::onApplicationInterrupted(EventHandlerCallback handler, void* cookie)
@@ -323,7 +372,7 @@ void ApplicationEventHandler::onApplicationInterrupted(EventHandlerCallback hand
 	m_ApplicationInterruptedHandler = handler;
 	m_ApplicationInterruptedCookie = cookie;
 
-#ifdef WIN32
+#if defined(_WIN32)
 	SetConsoleCtrlHandler((PHANDLER_ROUTINE)handlerRoutine, TRUE);
 #else
 	struct sigaction action;

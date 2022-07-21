@@ -12,13 +12,13 @@ namespace pcpp
 
 std::vector<std::string> splitByWhiteSpaces(std::string str)
 {
-    std::string buf;
-    std::stringstream stream(str);
-    std::vector<std::string> result;
-    while (stream >> buf)
-        result.push_back(buf);
+	std::string buf;
+	std::stringstream stream(str);
+	std::vector<std::string> result;
+	while (stream >> buf)
+		result.push_back(buf);
 
-    return result;
+	return result;
 }
 
 
@@ -67,12 +67,12 @@ SdpLayer::SdpLayer(std::string username, long sessionID, long sessionVersion, IP
 	addField(PCPP_SDP_TIME_FIELD, startTimeStream.str() + " " + stopTimeStream.str());
 }
 
-std::string SdpLayer::toString()
+std::string SdpLayer::toString() const
 {
 	return "SDP Layer";
 }
 
-IPv4Address SdpLayer::getOwnerIPv4Address()
+IPv4Address SdpLayer::getOwnerIPv4Address() const
 {
 	HeaderField* originator = getFieldByName(PCPP_SDP_ORIGINATOR_FIELD);
 	if (originator == NULL)
@@ -88,7 +88,7 @@ IPv4Address SdpLayer::getOwnerIPv4Address()
 	return IPv4Address(tokens[5]);
 }
 
-uint16_t SdpLayer::getMediaPort(std::string mediaType)
+uint16_t SdpLayer::getMediaPort(std::string mediaType) const
 {
 	int mediaFieldIndex = 0;
 	HeaderField* mediaDesc = getFieldByName(PCPP_SDP_MEDIA_NAME_FIELD, mediaFieldIndex);
@@ -115,7 +115,7 @@ bool SdpLayer::addMediaDescription(std::string mediaType, uint16_t mediaPort, st
 	std::string mediaFieldValue = mediaType + " " + portStream.str() + " " + mediaProtocol + " " + mediaFormat;
 	if (addField(PCPP_SDP_MEDIA_NAME_FIELD, mediaFieldValue) == NULL)
 	{
-		LOG_ERROR("Failed to add media description field");
+		PCPP_LOG_ERROR("Failed to add media description field");
 		return false;
 	}
 
@@ -124,7 +124,7 @@ bool SdpLayer::addMediaDescription(std::string mediaType, uint16_t mediaPort, st
 	{
 		if (addField(PCPP_SDP_MEDIA_ATTRIBUTE_FIELD, *iter) == NULL)
 		{
-			LOG_ERROR("Faild to add media attribute '%s'", iter->c_str());
+			PCPP_LOG_ERROR("Failed to add media attribute '" << *iter << "'");
 			return false;
 		}
 	}

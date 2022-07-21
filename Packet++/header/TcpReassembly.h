@@ -5,6 +5,9 @@
 #include "IpAddress.h"
 #include "PointerVector.h"
 #include <map>
+#include <list>
+#include <time.h>
+
 
 /**
  * @file
@@ -40,12 +43,26 @@
  *
  * __Basic Usage and APIs:__
  * - pcpp#TcpReassembly c'tor - Create an instance, provide the callbacks and the user cookie to the instance
- * - pcpp#TcpReassembly#ReassemblePacket() - Feed pcpp#TcpReassembly instance with packets
+ * - pcpp#TcpReassembly#reassemblePacket() - Feed pcpp#TcpReassembly instance with packets
  * - pcpp#TcpReassembly#closeConnection() - Manually close a connection by a flow key
  * - pcpp#TcpReassembly#closeAllConnections() - Manually close all currently opened connections
  * - pcpp#TcpReassembly#OnTcpMessageReady callback - Invoked when new data arrives on a certain connection. Contains the new data as well as connection data (5-tuple, flow key)
  * - pcpp#TcpReassembly#OnTcpConnectionStart callback - Invoked when a new connection is identified
  * - pcpp#TcpReassembly#OnTcpConnectionEnd callback - Invoked when a connection ends (either by FIN/RST or manually by the user)
+ *
+ * __Additional information:__
+ * When the connection is closed the information is not being deleted from memory immediately. There is a delay between these moments. Existence of this delay is caused by two reasons:
+ * - pcpp#TcpReassembly#reassemblePacket() should detect the packets that arrive after the FIN packet has been received
+ * - the user can use the information about connections managed by pcpp#TcpReassembly instance. Following methods are used for this purpose: pcpp#TcpReassembly#getConnectionInformation and pcpp#TcpReassembly#isConnectionOpen.
+ * Cleaning of memory can be performed automatically (the default behavior) by pcpp#TcpReassembly#reassemblePacket() or manually by calling pcpp#TcpReassembly#purgeClosedConnections in the user code.
+ * Automatic cleaning is performed once per second.
+ *
+ * The struct pcpp#TcpReassemblyConfiguration allows to setup the parameters of cleanup. Following parameters are supported:
+ * - pcpp#TcpReassemblyConfiguration#doNotRemoveConnInfo - if this member is set to false the automatic cleanup mode is applied
+ * - pcpp#TcpReassemblyConfiguration#closedConnectionDelay - the value of delay expressed in seconds. The minimum value is 1
+ * - pcpp#TcpReassemblyConfiguration#maxNumToClean - to avoid performance overhead when the cleanup is being performed, this parameter is used. It defines the maximum number of items to be removed per one call of pcpp#TcpReassembly#purgeClosedConnections
+ * - pcpp#TcpReassemblyConfiguration#maxOutOfOrderFragments - the maximum number of unmatched fragments to keep per flow before missed fragments are considered lost. A value of 0 means unlimited
+ *
  */
 
 /**
@@ -62,13 +79,13 @@ namespace pcpp
 struct ConnectionData
 {
 	/** Source IP address */
-	IPAddress* srcIP;
+	IPAddress srcIP;
 	/** Destination IP address */
-	IPAddress* dstIP;
+	IPAddress dstIP;
 	/** Source TCP/UDP port */
-	size_t srcPort;
+	uint16_t srcPort;
 	/** Destination TCP/UDP port */
-	size_t dstPort;
+	uint16_t dstPort;
 	/** A 4-byte hash key representing the connection */
 	uint32_t flowKey;
 	/** Start TimeStamp of the connection */
@@ -79,34 +96,7 @@ struct ConnectionData
 	/**
 	 * A c'tor for this struct that basically zeros all members
 	 */
-	ConnectionData() : srcIP(NULL), dstIP(NULL), srcPort(0), dstPort(0), flowKey(0), startTime(), endTime()  {}
-
-	/**
-	 * A d'tor for this strcut. Notice it frees the memory of srcIP and dstIP members
-	 */
-	~ConnectionData();
-
-	/**
-	 * A copy constructor for this struct. Notice it clones ConnectionData#srcIP and ConnectionData#dstIP
-	 */
-	ConnectionData(const ConnectionData& other);
-
-	/**
-	 * An assignment operator for this struct. Notice it clones ConnectionData#srcIP and ConnectionData#dstIP
-	 */
-	ConnectionData& operator=(const ConnectionData& other);
-
-	/**
-	 * Set source IP
-	 * @param[in] sourceIP A pointer to the source IP to set. Notice the IPAddress object will be cloned
-	 */
-	void setSrcIpAddress(const IPAddress* sourceIP) { srcIP = sourceIP->clone(); }
-
-	/**
-	 * Set destination IP
-	 * @param[in] destIP A pointer to the destination IP to set. Notice the IPAddress object will be cloned
-	 */
-	void setDstIpAddress(const IPAddress* destIP) { dstIP = destIP->clone(); }
+	ConnectionData() : srcPort(0), dstPort(0), flowKey(0), startTime(), endTime() {}
 
 	/**
 	 * Set startTime of Connection
@@ -119,10 +109,6 @@ struct ConnectionData
 	 * @param[in] endTime integer value
 	 */
 	void setEndTime(const timeval &endTime) { this->endTime = endTime; }
-
-private:
-
-	void copyData(const ConnectionData& other);
 };
 
 
@@ -136,48 +122,25 @@ class TcpReassembly;
  */
 class TcpStreamData
 {
-	friend class TcpReassembly;
-
 public:
-
 	/**
-	 * A c'tor for this class that basically zeros all members
-	 */
-	TcpStreamData();
-
-	/**
-	 * A c'tor for this class that get data from outside and set the internal members. Notice that when this class is destroyed it also frees the TCP data it stores
-	 * @param[in] tcpData A buffer containing the TCP data piece
+	 * A c'tor for this class that get data from outside and set the internal members
+	 * @param[in] tcpData A pointer to buffer containing the TCP data piece
 	 * @param[in] tcpDataLength The length of the buffer
+	 * @param[in] missingBytes The number of missing bytes due to packet loss.
 	 * @param[in] connData TCP connection information for this TCP data
+	 * @param[in] timestamp when this packet was received
 	 */
-	TcpStreamData(uint8_t* tcpData, size_t tcpDataLength, ConnectionData connData);
-
-	/**
-	 * A d'tor for this class
-	 */
-	~TcpStreamData();
-
-	/**
-	 * A copy c'tor for this class. Notice the data buffer is copied from the source instance to this instance, so even if the source instance is destroyed the data in this instance
-	 * stays valid. When this instance is destroyed it also frees the data buffer
-	 * @param[in] other The instance to copy from
-	 */
-	TcpStreamData(TcpStreamData& other);
-
-	/**
-	 * Overload of the assignment operator. Notice the data buffer is copied from the source instance to this instance, so even if the source instance is destroyed the data in this instance
-	 * stays valid. When this instance is destroyed it also frees the data buffer
-	 * @param[in] other The instance to copy from
-	 * @return A reference to this instance
-	 */
-	TcpStreamData& operator=(const TcpStreamData& other);
+	TcpStreamData(const uint8_t* tcpData, size_t tcpDataLength, size_t missingBytes, const ConnectionData& connData, timeval timestamp)
+		: m_Data(tcpData), m_DataLen(tcpDataLength), m_MissingBytes(missingBytes), m_Connection(connData), m_Timestamp(timestamp)
+	{
+	}
 
 	/**
 	 * A getter for the data buffer
 	 * @return A pointer to the buffer
 	 */
-	uint8_t* getData() const { return m_Data; }
+	const uint8_t* getData() const { return m_Data; }
 
 	/**
 	 * A getter for buffer length
@@ -186,25 +149,78 @@ public:
 	size_t getDataLength() const { return m_DataLen; }
 
 	/**
-	 * A getter for the connection data
-	 * @return The connection data
+	 * A getter for missing byte count due to packet loss.
+	 * @return Missing byte count
 	 */
-	ConnectionData getConnectionData() const { return m_Connection; }
+	size_t getMissingByteCount() const { return m_MissingBytes; }
+
+	/**
+	 * Determine if bytes are missing. getMissingByteCount can be called to determine the number of missing bytes.
+	 * @return true if bytes are missing.
+	 */
+	bool isBytesMissing() const { return getMissingByteCount() > 0; }
 
 	/**
 	 * A getter for the connection data
 	 * @return The const reference to connection data
 	 */
-	const ConnectionData& getConnectionDataRef() const { return m_Connection; }
+	const ConnectionData& getConnectionData() const { return m_Connection; }
+
+	/**
+	 * A getter for the timestamp of this packet
+	 * @return The const timeval object with timestamp of this packet
+	 */
+	timeval getTimeStamp() const { return m_Timestamp; }
 
 private:
-	uint8_t* m_Data;
+	const uint8_t* m_Data;
 	size_t m_DataLen;
-	ConnectionData m_Connection;
-	bool m_DeleteDataOnDestruction;
+	size_t m_MissingBytes;
+	const ConnectionData& m_Connection;
+	timeval m_Timestamp;
+};
 
-	void setDeleteDataOnDestruction(bool flag) { m_DeleteDataOnDestruction = flag; }
-	void copyData(const TcpStreamData& other);
+
+/**
+ * @struct TcpReassemblyConfiguration
+ * A structure for configuring the TcpReassembly class
+ */
+struct TcpReassemblyConfiguration
+{
+	/** The flag indicating whether to remove the connection data after a connection is closed */
+	bool removeConnInfo;
+
+	/** How long the closed connections will not be cleaned up. The value is expressed in seconds. If the value is set to 0 then TcpReassembly should use the default value.
+	 * This parameter is only relevant if removeConnInfo is equal to true.
+	 */
+	uint32_t closedConnectionDelay;
+
+	/** The maximum number of items to be cleaned up per one call of purgeClosedConnections. If the value is set to 0 then TcpReassembly should use the default value.
+	 * This parameter is only relevant if removeConnInfo is equal to true.
+	 */
+	uint32_t maxNumToClean;
+
+	/** The maximum number of fragments with a non-matching sequence-number to store per connection flow before packets are assumed permanently missed.
+	    If the value is 0, TcpReassembly should keep out of order fragments indefinitely, or until a message from the paired side is seen.
+	 */
+	uint32_t maxOutOfOrderFragments;
+
+	/**  To enable to clear buffer once packet contains data from a different side than the side seen before
+	 */
+	bool enableBaseBufferClearCondition;
+
+	/**
+	 * A c'tor for this struct
+	 * @param[in] removeConnInfo The flag indicating whether to remove the connection data after a connection is closed. The default is true
+	 * @param[in] closedConnectionDelay How long the closed connections will not be cleaned up. The value is expressed in seconds. If it's set to 0 the default value will be used. The default is 5.
+	 * @param[in] maxNumToClean The maximum number of items to be cleaned up per one call of purgeClosedConnections. If it's set to 0 the default value will be used. The default is 30.
+	 * @param[in] maxOutOfOrderFragments The maximum number of unmatched fragments to keep per flow before missed fragments are considered lost. The default is unlimited.
+	 * @param[in] enableBaseBufferClearCondition To enable to clear buffer once packet contains data from a different side than the side seen before
+	 */
+	TcpReassemblyConfiguration(bool removeConnInfo = true, uint32_t closedConnectionDelay = 5, uint32_t maxNumToClean = 30, uint32_t maxOutOfOrderFragments = 0,
+		bool enableBaseBufferClearCondition = true) : removeConnInfo(removeConnInfo), closedConnectionDelay(closedConnectionDelay), maxNumToClean(maxNumToClean), maxOutOfOrderFragments(maxOutOfOrderFragments), enableBaseBufferClearCondition(enableBaseBufferClearCondition)
+	{
+	}
 };
 
 
@@ -228,13 +244,80 @@ public:
 	};
 
 	/**
+	 * An enum for providing reassembly status for each processed packet
+	 */
+	enum ReassemblyStatus
+	{
+		/**
+		 * The processed packet contains valid TCP payload, and its payload is processed by `OnMessageReadyCallback` callback function.
+		 * The packet may be:
+		 * 1. An in-order TCP packet, meaning `packet_sequence == sequence_expected`.
+		 *    Note if there's any buffered out-of-order packet waiting for this packet, their associated callbacks are called in this `reassemblePacket` call.
+		 * 2. An out-of-order TCP packet which satisfy `packet_sequence < sequence_expected && packet_sequence + packet_payload_length > sequence_expected`.
+		 *    Note only the new data (the `[sequence_expected, packet_sequence + packet_payload_length]` part ) is processed by `OnMessageReadyCallback` callback function.
+		 */
+		TcpMessageHandled,
+		/**
+		 * The processed packet is an out-of-order TCP packet, meaning `packet_sequence > sequence_expected`. It's buffered so no `OnMessageReadyCallback` callback function is called.
+		 * The callback function for this packet maybe called LATER, under different circumstances:
+		 * 1. When an in-order packet which is right before this packet arrives(case 1 and case 2 described in `TcpMessageHandled` section above).
+		 * 2. When a FIN or RST packet arrives, which will clear the buffered out-of-order packets of this side.
+		 *    If this packet contains "new data", meaning `(packet_sequence <= sequence_expected) && (packet_sequence + packet_payload_length > sequence_expected)`, the new data is processed by `OnMessageReadyCallback` callback.
+		 */
+		OutOfOrderTcpMessageBuffered,
+		/**
+		 * The processed packet is a FIN or RST packet with no payload.
+		 * Buffered out-of-order packets will be cleared.
+		 * If they contain "new data", the new data is processed by `OnMessageReadyCallback` callback.
+		 */
+		FIN_RSTWithNoData,
+		/**
+		 * The processed packet is not a SYN/SYNACK/FIN/RST packet and has no payload.
+		 * Normally it's just a bare ACK packet.
+		 * It's ignored and no callback function is called.
+		 */
+		Ignore_PacketWithNoData,
+		/**
+		 * The processed packet comes from a closed flow(an in-order FIN or RST is seen).
+		 * It's ignored and no callback function is called.
+		 */
+		Ignore_PacketOfClosedFlow,
+		/**
+		 * The processed packet is a restransmission packet with no new data, meaning the `packet_sequence + packet_payload_length < sequence_expected`.
+		 * It's ignored and no callback function is called.
+		 */
+		Ignore_Retransimission,
+		/**
+		 * The processed packet is not an IP packet.
+		 * It's ignored and no callback function is called.
+		 */
+		NonIpPacket,
+		/**
+		 * The processed packet is not a TCP packet.
+		 * It's ignored and no callback function is called.
+		 */
+		NonTcpPacket,
+		/**
+		 * The processed packet does not belong to any known TCP connection.
+		 * It's ignored and no callback function is called.
+		 * Normally this will be happen.
+		 */
+		Error_PacketDoesNotMatchFlow,
+	};
+
+	/**
+	 * The type for storing the connection information
+	 */
+	typedef std::map<uint32_t, ConnectionData> ConnectionInfoList;
+
+	/**
 	 * @typedef OnTcpMessageReady
 	 * A callback invoked when new data arrives on a connection
 	 * @param[in] side The side this data belongs to (MachineA->MachineB or vice versa). The value is 0 or 1 where 0 is the first side seen in the connection and 1 is the second side seen
 	 * @param[in] tcpData The TCP data itself + connection information
 	 * @param[in] userCookie A pointer to the cookie provided by the user in TcpReassembly c'tor (or NULL if no cookie provided)
 	 */
-	typedef void (*OnTcpMessageReady)(int side, TcpStreamData tcpData, void* userCookie);
+	typedef void (*OnTcpMessageReady)(int8_t side, const TcpStreamData& tcpData, void* userCookie);
 
 	/**
 	 * @typedef OnTcpConnectionStart
@@ -242,7 +325,7 @@ public:
 	 * @param[in] connectionData Connection information
 	 * @param[in] userCookie A pointer to the cookie provided by the user in TcpReassembly c'tor (or NULL if no cookie provided)
 	 */
-	typedef void (*OnTcpConnectionStart)(ConnectionData connectionData, void* userCookie);
+	typedef void (*OnTcpConnectionStart)(const ConnectionData& connectionData, void* userCookie);
 
 	/**
 	 * @typedef OnTcpConnectionEnd
@@ -251,7 +334,7 @@ public:
 	 * @param[in] reason The reason for connection termination: FIN/RST packet or manually by the user
 	 * @param[in] userCookie A pointer to the cookie provided by the user in TcpReassembly c'tor (or NULL if no cookie provided)
 	 */
-	typedef void (*OnTcpConnectionEnd)(ConnectionData connectionData, ConnectionEndReason reason, void* userCookie);
+	typedef void (*OnTcpConnectionEnd)(const ConnectionData& connectionData, ConnectionEndReason reason, void* userCookie);
 
 	/**
 	 * A c'tor for this class
@@ -259,28 +342,25 @@ public:
 	 * @param[in] userCookie A pointer to an object provided by the user. This pointer will be returned when invoking the various callbacks. This parameter is optional, default cookie is NULL
 	 * @param[in] onConnectionStartCallback The callback to be invoked when a new connection is identified. This parameter is optional
 	 * @param[in] onConnectionEndCallback The callback to be invoked when a new connection is terminated (either by a FIN/RST packet or manually by the user). This parameter is optional
+	 * @param[in] config Optional parameter for defining special configuration parameters. If not set the default parameters will be set
 	 */
-	TcpReassembly(OnTcpMessageReady onMessageReadyCallback, void* userCookie = NULL, OnTcpConnectionStart onConnectionStartCallback = NULL, OnTcpConnectionEnd onConnectionEndCallback = NULL);
-
-	/**
-	 * A d'tor for this class. Frees all internal structures. Notice that if the d'tor is called while connections are still open, all data is lost and TcpReassembly#OnTcpConnectionEnd won't
-	 * be called for those connections
-	 */
-	~TcpReassembly();
+	TcpReassembly(OnTcpMessageReady onMessageReadyCallback, void* userCookie = NULL, OnTcpConnectionStart onConnectionStartCallback = NULL, OnTcpConnectionEnd onConnectionEndCallback = NULL, const TcpReassemblyConfiguration &config = TcpReassemblyConfiguration());
 
 	/**
 	 * The most important method of this class which gets a packet from the user and processes it. If this packet opens a new connection, ends a connection or contains new data on an
 	 * existing connection, the relevant callback will be called (TcpReassembly#OnTcpMessageReady, TcpReassembly#OnTcpConnectionStart, TcpReassembly#OnTcpConnectionEnd)
 	 * @param[in] tcpData A reference to the packet to process
+	 * @return A enum of `TcpReassembly::ReassemblyStatus`, indicating status of TCP reassembly
 	 */
-	void reassemblePacket(Packet& tcpData);
+	ReassemblyStatus reassemblePacket(Packet& tcpData);
 
 	/**
 	 * The most important method of this class which gets a raw packet from the user and processes it. If this packet opens a new connection, ends a connection or contains new data on an
 	 * existing connection, the relevant callback will be invoked (TcpReassembly#OnTcpMessageReady, TcpReassembly#OnTcpConnectionStart, TcpReassembly#OnTcpConnectionEnd)
 	 * @param[in] tcpRawData A reference to the raw packet to process
+	 * @return A enum of `TcpReassembly::ReassemblyStatus`, indicating status of TCP reassembly
 	 */
-	void reassemblePacket(RawPacket* tcpRawData);
+	ReassemblyStatus reassemblePacket(RawPacket* tcpRawData);
 
 	/**
 	 * Close a connection manually. If the connection doesn't exist or already closed an error log is printed. This method will cause the TcpReassembly#OnTcpConnectionEnd to be invoked with
@@ -296,10 +376,10 @@ public:
 	void closeAllConnections();
 
 	/**
-	 * Get a list of all connections managed by this TcpReassembly instance (both connections that are open and those that are already closed)
-	 * @return A list of all connections managed. Notice this list is constant and cannot be changed by the user
+	 * Get a map of all connections managed by this TcpReassembly instance (both connections that are open and those that are already closed)
+	 * @return A map of all connections managed. Notice this map is constant and cannot be changed by the user
 	 */
-	const std::vector<ConnectionData>& getConnectionInformation() const;
+	const ConnectionInfoList& getConnectionInformation() const { return m_ConnectionInfo; }
 
 	/**
 	 * Check if a certain connection managed by this TcpReassembly instance is currently opened or closed
@@ -308,57 +388,71 @@ public:
 	 */
 	int isConnectionOpen(const ConnectionData& connection) const;
 
+	/**
+	 * Clean up the closed connections from the memory
+	 * @param[in] maxNumToClean The maximum number of items to be cleaned up per one call. This parameter, when its value is not zero, overrides the value that was set by the constructor.
+	 * @return The number of cleared items
+	 */
+	uint32_t purgeClosedConnections(uint32_t maxNumToClean = 0);
+
 private:
 	struct TcpFragment
 	{
 		uint32_t sequence;
 		size_t dataLength;
 		uint8_t* data;
+		timeval timestamp;
 
-		TcpFragment() { sequence = 0; dataLength = 0; data = NULL; }
-		~TcpFragment() { if (data != NULL) delete [] data; }
+		TcpFragment() : sequence(0), dataLength(0), data(NULL) {}
+		~TcpFragment() { delete [] data; }
 	};
 
 	struct TcpOneSideData
 	{
-		IPAddress* srcIP;
+		IPAddress srcIP;
 		uint16_t srcPort;
 		uint32_t sequence;
 		PointerVector<TcpFragment> tcpFragmentList;
 		bool gotFinOrRst;
 
-		void setSrcIP(IPAddress* sourrcIP);
-
-		TcpOneSideData() { srcIP = NULL; srcPort = 0; sequence = 0; gotFinOrRst = false; }
-
-		~TcpOneSideData() { if (srcIP != NULL) delete srcIP; }
+		TcpOneSideData() : srcPort(0), sequence(0), gotFinOrRst(false) {}
 	};
 
 	struct TcpReassemblyData
 	{
-		int numOfSides;
-		int prevSide;
+		bool closed;
+		int8_t numOfSides;
+		int8_t prevSide;
 		TcpOneSideData twoSides[2];
 		ConnectionData connData;
 
-		TcpReassemblyData() { numOfSides = 0; prevSide = -1; }
+		TcpReassemblyData() : closed(false), numOfSides(0), prevSide(-1) {}
 	};
+
+	typedef std::map<uint32_t, TcpReassemblyData> ConnectionList;
+	typedef std::map<time_t, std::list<uint32_t> > CleanupList;
 
 	OnTcpMessageReady m_OnMessageReadyCallback;
 	OnTcpConnectionStart m_OnConnStart;
 	OnTcpConnectionEnd m_OnConnEnd;
 	void* m_UserCookie;
-	std::map<uint32_t, TcpReassemblyData*> m_ConnectionList;
-	std::map<uint32_t, bool> m_ClosedConnectionList;
-	std::vector<ConnectionData> m_ConnectionInfo;
+	ConnectionList m_ConnectionList;
+	ConnectionInfoList m_ConnectionInfo;
+	CleanupList m_CleanupList;
+	bool m_RemoveConnInfo;
+	uint32_t m_ClosedConnectionDelay;
+	uint32_t m_MaxNumToClean;
+	size_t m_MaxOutOfOrderFragments;
+	time_t m_PurgeTimepoint;
+	bool m_EnableBaseBufferClearCondition;
 
-	void checkOutOfOrderFragments(TcpReassemblyData* tcpReassemblyData, int sideIndex, bool cleanWholeFragList);
+	void checkOutOfOrderFragments(TcpReassemblyData* tcpReassemblyData, int8_t sideIndex, bool cleanWholeFragList);
 
-	std::string prepareMissingDataMessage(uint32_t missingDataLen);
-
-	void handleFinOrRst(TcpReassemblyData* tcpReassemblyData, int sideIndex, uint32_t flowKey);
+	void handleFinOrRst(TcpReassemblyData* tcpReassemblyData, int8_t sideIndex, uint32_t flowKey);
 
 	void closeConnectionInternal(uint32_t flowKey, ConnectionEndReason reason);
+
+	void insertIntoCleanupList(uint32_t flowKey);
 };
 
 }

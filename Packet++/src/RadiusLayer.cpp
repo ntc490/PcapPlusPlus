@@ -5,24 +5,18 @@
 
 #include <string.h>
 #include <sstream>
-#if defined(WIN32) || defined(WINx64) //for using ntohl, ntohs, etc.
-#include <winsock2.h>
-#elif LINUX
-#include <in.h> //for using ntohl, ntohs, etc.
-#elif MAC_OS_X
-#include <arpa/inet.h> //for using ntohl, ntohs, etc.
-#endif
+#include "EndianPortable.h"
 
 namespace pcpp
 {
 
 RadiusAttribute RadiusAttributeBuilder::build() const
 {
-	uint8_t recSize = m_RecValueLen+2;
+	size_t recSize = m_RecValueLen+2;
 	uint8_t* recordBuffer = new uint8_t[recSize];
 	memset(recordBuffer, 0, recSize);
-	recordBuffer[0] = m_RecType;
-	recordBuffer[1] = recSize;
+	recordBuffer[0] = static_cast<uint8_t>(m_RecType);
+	recordBuffer[1] = static_cast<uint8_t>(recSize);
 	if (m_RecValueLen > 0)
 		memcpy(recordBuffer+2, m_RecValue, m_RecValueLen);
 
@@ -39,7 +33,7 @@ RadiusLayer::RadiusLayer(uint8_t code, uint8_t id, const uint8_t* authenticator,
 	radius_header* hdr = getRadiusHeader();
 	hdr->code = code;
 	hdr->id = id;
-	hdr->length = htons(sizeof(radius_header));
+	hdr->length = htobe16(sizeof(radius_header));
 	if (authenticatorArrSize == 0 || authenticator == NULL)
 		return;
 	if (authenticatorArrSize > 16)
@@ -57,7 +51,7 @@ RadiusLayer::RadiusLayer(uint8_t code, uint8_t id, const std::string authenticat
 	radius_header* hdr = getRadiusHeader();
 	hdr->code = code;
 	hdr->id = id;
-	hdr->length = htons(sizeof(radius_header));
+	hdr->length = htobe16(sizeof(radius_header));
 	setAuthenticatorValue(authenticator);
 }
 
@@ -68,7 +62,7 @@ RadiusAttribute RadiusLayer::addAttrAt(const RadiusAttributeBuilder& attrBuilder
 
 	if (!extendLayer(offset, sizeToExtend))
 	{
-		LOG_ERROR("Could not extend RadiusLayer in [%d] bytes", (int)newAttr.getTotalSize());
+		PCPP_LOG_ERROR("Could not extend RadiusLayer in [" << newAttr.getTotalSize() << "] bytes");
 		return RadiusAttribute(NULL);
 	}
 
@@ -80,12 +74,12 @@ RadiusAttribute RadiusLayer::addAttrAt(const RadiusAttributeBuilder& attrBuilder
 
 	newAttr.purgeRecordData();
 
-	getRadiusHeader()->length = htons(m_DataLen);
+	getRadiusHeader()->length = htobe16(m_DataLen);
 
 	return RadiusAttribute(newAttrPtr);
 }
 
-std::string RadiusLayer::getAuthenticatorValue()
+std::string RadiusLayer::getAuthenticatorValue() const
 {
 	return byteArrayToHexString(getRadiusHeader()->authenticator, 16);
 }
@@ -134,9 +128,9 @@ std::string RadiusLayer::getRadiusMessageString(uint8_t radiusMessageCode)
 	}
 }
 
-size_t RadiusLayer::getHeaderLen()
+size_t RadiusLayer::getHeaderLen() const
 {
-	uint16_t len = ntohs(getRadiusHeader()->length);
+	uint16_t len = be16toh(getRadiusHeader()->length);
 	if (len > m_DataLen)
 		return m_DataLen;
 
@@ -145,10 +139,10 @@ size_t RadiusLayer::getHeaderLen()
 
 void RadiusLayer::computeCalculateFields()
 {
-	getRadiusHeader()->length = htons(m_DataLen);
+	getRadiusHeader()->length = htobe16(m_DataLen);
 }
 
-std::string RadiusLayer::toString()
+std::string RadiusLayer::toString() const
 {
 	std::ostringstream str;
 	str << "RADIUS Layer, " <<
@@ -160,27 +154,27 @@ std::string RadiusLayer::toString()
 			(int)getRadiusHeader()->id <<
 			", " <<
 			"Length=" <<
-			ntohs(getRadiusHeader()->length);
+			be16toh(getRadiusHeader()->length);
 
 	return str.str();
 }
 
-RadiusAttribute RadiusLayer::getFirstAttribute()
+RadiusAttribute RadiusLayer::getFirstAttribute() const
 {
 	return m_AttributeReader.getFirstTLVRecord(getAttributesBasePtr(), getHeaderLen() - sizeof(radius_header));
 }
 
-RadiusAttribute RadiusLayer::getNextAttribute(RadiusAttribute& attr)
+RadiusAttribute RadiusLayer::getNextAttribute(RadiusAttribute& attr) const
 {
 	return m_AttributeReader.getNextTLVRecord(attr, getAttributesBasePtr(), getHeaderLen() - sizeof(radius_header));
 }
 
-RadiusAttribute RadiusLayer::getAttribute(uint8_t attributeType)
+RadiusAttribute RadiusLayer::getAttribute(uint8_t attributeType) const
 {
 	return m_AttributeReader.getTLVRecord(attributeType, getAttributesBasePtr(), getHeaderLen() - sizeof(radius_header));
 }
 
-size_t RadiusLayer::getAttributeCount()
+size_t RadiusLayer::getAttributeCount() const
 {
 	return m_AttributeReader.getTLVRecordCount(getAttributesBasePtr(), getHeaderLen() - sizeof(radius_header));
 }
@@ -225,7 +219,7 @@ bool RadiusLayer::removeAttribute(uint8_t attrType)
 	}
 
 	m_AttributeReader.changeTLVRecordCount(-1);
-	getRadiusHeader()->length = htons(m_DataLen);
+	getRadiusHeader()->length = htobe16(m_DataLen);
 
 	return true;
 }
@@ -239,9 +233,20 @@ bool RadiusLayer::removeAllAttributes()
 
 	m_AttributeReader.changeTLVRecordCount(0-getAttributeCount());
 
-	getRadiusHeader()->length = htons(m_DataLen);
+	getRadiusHeader()->length = htobe16(m_DataLen);
 
 	return true;
+}
+
+bool RadiusLayer::isDataValid(const uint8_t* udpData, size_t udpDataLen)
+{
+	if(udpData != NULL)
+	{
+		const radius_header* radHdr = reinterpret_cast<const radius_header*>(udpData);
+		size_t radLen = be16toh(radHdr->length);
+		return radLen >= sizeof(radius_header) && radLen <= udpDataLen;
+	}
+	return false;
 }
 
 }

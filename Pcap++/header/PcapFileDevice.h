@@ -3,6 +3,11 @@
 
 #include "PcapDevice.h"
 #include "RawPacket.h"
+#include <fstream>
+
+// forward declaration for structs and typedefs defined in pcap.h
+struct pcap_dumper;
+typedef struct pcap_dumper pcap_dumper_t;
 
 /// @file
 
@@ -20,9 +25,9 @@ namespace pcpp
 	class IFileDevice : public IPcapDevice
 	{
 	protected:
-		char* m_FileName;
+		std::string m_FileName;
 
-		IFileDevice(const char* fileName);
+		IFileDevice(const std::string& fileName);
 		virtual ~IFileDevice();
 
 	public:
@@ -30,13 +35,14 @@ namespace pcpp
 		/**
 		* @return The name of the file
 		*/
-		std::string getFileName();
+		std::string getFileName() const;
 
 
 		//override methods
 
 		/**
 		 * Close the file
+		 * @return No return value
 		 */
 		virtual void close();
 	};
@@ -57,7 +63,7 @@ namespace pcpp
 		 * isn't opened yet, so reading packets will fail. For opening the file call open()
 		 * @param[in] fileName The full path of the file to read
 		 */
-		IFileReaderDevice(const char* fileName);
+		IFileReaderDevice(const std::string& fileName);
 
 	public:
 
@@ -69,7 +75,7 @@ namespace pcpp
 		/**
 		* @return The file size in bytes
 		*/
-		uint64_t getFileSize();
+		uint64_t getFileSize() const;
 
 		virtual bool getNextPacket(RawPacket& rawPacket) = 0;
 
@@ -88,7 +94,7 @@ namespace pcpp
 		 * @param[in] fileName The file name to open
 		 * @return An instance of the reader to read the file. Notice you should free this instance when done using it
 		 */
-		static IFileReaderDevice* getReader(const char* fileName);
+		static IFileReaderDevice* getReader(const std::string& fileName);
 	};
 
 
@@ -111,7 +117,7 @@ namespace pcpp
 		 * isn't opened yet, so reading packets will fail. For opening the file call open()
 		 * @param[in] fileName The full path of the file to read
 		 */
-		PcapFileReaderDevice(const char* fileName);
+		PcapFileReaderDevice(const std::string& fileName) : IFileReaderDevice(fileName), m_PcapLinkLayerType(LINKTYPE_ETHERNET) {}
 
 		/**
 		 * A destructor for this class
@@ -121,7 +127,7 @@ namespace pcpp
 		/**
 		* @return The link layer type of this file
 		*/
-		LinkLayerType getLinkLayerType();
+		LinkLayerType getLinkLayerType() const { return m_PcapLinkLayerType; }
 
 
 		//overridden methods
@@ -142,10 +148,95 @@ namespace pcpp
 		bool open();
 
 		/**
-		 * Get statistics of packets read so far. In the pcap_stat struct, only ps_recv member is relevant. The rest of the members will contain 0
+		 * Get statistics of packets read so far. In the PcapStats struct, only the packetsRecv member is relevant. The rest of the members will contain 0
 		 * @param[out] stats The stats struct where stats are returned
 		 */
-		void getStatistics(pcap_stat& stats);
+		void getStatistics(PcapStats& stats) const;
+	};
+
+	/**
+	 * @class SnoopFileReaderDevice
+	 * A class for opening a snoop file in read-only mode. This class enable to open the file and read all packets, packet-by-packet
+	 */
+	class SnoopFileReaderDevice : public IFileReaderDevice
+	{
+	private:
+		#pragma pack(0)
+		/*
+		 * File format header.
+		 */
+		typedef struct {
+		    uint64_t        identification_pattern;
+		    uint32_t        version_number;
+		    uint32_t        datalink_type;
+		} snoop_file_header_t;
+
+		/*
+		 * Packet record header.
+		 */
+		typedef struct {
+		    uint32_t        original_length;     /* original packet length */
+		    uint32_t        included_length;     /* saved packet length */
+		    uint32_t        packet_record_length;/* total record length */
+		    uint32_t        ndrops_cumulative;   /* cumulative drops */
+		    uint32_t        time_sec;            /* timestamp */
+		    uint32_t        time_usec;           /* microsecond timestamp */
+		} snoop_packet_header_t;
+		#pragma pack()
+
+		LinkLayerType m_PcapLinkLayerType;
+		std::ifstream m_snoopFile;
+
+		// private copy c'tor
+		SnoopFileReaderDevice(const PcapFileReaderDevice& other);
+		SnoopFileReaderDevice& operator=(const PcapFileReaderDevice& other);
+
+	public:
+		/**
+		 * A constructor for this class that gets the snoop full path file name to open. Notice that after calling this constructor the file
+		 * isn't opened yet, so reading packets will fail. For opening the file call open()
+		 * @param[in] fileName The full path of the file to read
+		 */
+		SnoopFileReaderDevice(const std::string& fileName) : IFileReaderDevice(fileName), m_PcapLinkLayerType(LINKTYPE_ETHERNET) {}
+
+		/**
+		 * A destructor for this class
+		 */
+		virtual ~SnoopFileReaderDevice();
+
+		/**
+		* @return The link layer type of this file
+		*/
+		LinkLayerType getLinkLayerType() const { return m_PcapLinkLayerType; }
+
+
+		//overridden methods
+
+		/**
+		 * Read the next packet from the file. Before using this method please verify the file is opened using open()
+		 * @param[out] rawPacket A reference for an empty RawPacket where the packet will be written
+		 * @return True if a packet was read successfully. False will be returned if the file isn't opened (also, an error log will be printed)
+		 * or if reached end-of-file
+		 */
+		bool getNextPacket(RawPacket& rawPacket);
+
+		/**
+		 * Open the file name which path was specified in the constructor in a read-only mode
+		 * @return True if file was opened successfully or if file is already opened. False if opening the file failed for some reason (for example:
+		 * file path does not exist)
+		 */
+		bool open();
+
+		/**
+		 * Get statistics of packets read so far. In the PcapStats struct, only the packetsRecv member is relevant. The rest of the members will contain 0
+		 * @param[out] stats The stats struct where stats are returned
+		 */
+		void getStatistics(PcapStats& stats) const;
+
+		/**
+		 * Close the snoop file
+		 */
+		void close();
 	};
 
 
@@ -157,16 +248,11 @@ namespace pcpp
 	{
 	private:
 		void* m_LightPcapNg;
-		struct bpf_program m_Bpf;
-		bool m_BpfInitialized;
-		int m_BpfLinkType;
-		std::string m_CurFilter;
+		BpfFilterWrapper m_BpfWrapper;
 
 		// private copy c'tor
 		PcapNgFileReaderDevice(const PcapNgFileReaderDevice& other);
 		PcapNgFileReaderDevice& operator=(const PcapNgFileReaderDevice& other);
-
-		bool matchPacketWithFilter(const uint8_t* packetData, size_t packetLen, timeval packetTimestamp, uint16_t linkType);
 
 	public:
 		/**
@@ -174,7 +260,7 @@ namespace pcpp
 		 * isn't opened yet, so reading packets will fail. For opening the file call open()
 		 * @param[in] fileName The full path of the file to read
 		 */
-		PcapNgFileReaderDevice(const char* fileName);
+		PcapNgFileReaderDevice(const std::string& fileName);
 
 		/**
 		 * A destructor for this class
@@ -187,7 +273,7 @@ namespace pcpp
 		 * returns it
 		 * @return The operating system string if exists, or an empty string otherwise
 		 */
-		std::string getOS();
+		std::string getOS() const;
 
 		/**
 		 * The pcap-ng format allows storing metadata at the header of the file. Part of this metadata is a string specifying the
@@ -195,7 +281,7 @@ namespace pcpp
 		 * returns it
 		 * @return The hardware string if exists, or an empty string otherwise
 		 */
-		std::string getHardware();
+		std::string getHardware() const;
 
 		/**
 		 * The pcap-ng format allows storing metadata at the header of the file. Part of this metadata is a string specifying the
@@ -203,7 +289,7 @@ namespace pcpp
 		 * returns it
 		 * @return The capture application string if exists, or an empty string otherwise
 		 */
-		std::string getCaptureApplication();
+		std::string getCaptureApplication() const;
 
 		/**
 		 * The pcap-ng format allows storing metadata at the header of the file. Part of this metadata is a string containing a user-defined
@@ -211,7 +297,7 @@ namespace pcpp
 		 * returns it
 		 * @return The comment written inside the file if exists, or an empty string otherwise
 		 */
-		std::string getCaptureFileComment();
+		std::string getCaptureFileComment() const;
 
 		/**
 		 * The pcap-ng format allows storing a user-defined comment for every packet (besides the comment per-file). This method reads
@@ -241,10 +327,10 @@ namespace pcpp
 		bool open();
 
 		/**
-		 * Get statistics of packets read so far. In the pcap_stat struct, only ps_recv member is relevant. The rest of the members will contain 0
+		 * Get statistics of packets read so far.
 		 * @param[out] stats The stats struct where stats are returned
 		 */
-		void getStatistics(pcap_stat& stats);
+		void getStatistics(PcapStats& stats) const;
 
 		/**
 		 * Set a filter for PcapNG reader device. Only packets that match the filter will be received
@@ -270,7 +356,7 @@ namespace pcpp
 		uint32_t m_NumOfPacketsWritten;
 		uint32_t m_NumOfPacketsNotWritten;
 
-		IFileWriterDevice(const char* fileName);
+		IFileWriterDevice(const std::string& fileName);
 
 	public:
 
@@ -315,12 +401,12 @@ namespace pcpp
 		 * @param[in] fileName The full path of the file
 		 * @param[in] linkLayerType The link layer type all packet in this file will be based on. The default is Ethernet
 		 */
-		PcapFileWriterDevice(const char* fileName, LinkLayerType linkLayerType = LINKTYPE_ETHERNET);
+		PcapFileWriterDevice(const std::string& fileName, LinkLayerType linkLayerType = LINKTYPE_ETHERNET);
 
 		/**
 		 * A destructor for this class
 		 */
-		~PcapFileWriterDevice();
+		~PcapFileWriterDevice() {}
 
 		/**
 		 * Write a RawPacket to the file. Before using this method please verify the file is opened using open(). This method won't change the
@@ -369,10 +455,15 @@ namespace pcpp
 		virtual void close();
 
 		/**
-		 * Get statistics of packets written so far. In the pcap_stat struct, only ps_recv member is relevant. The rest of the members will contain 0
+		 * Flush packets to disk.
+		 */
+		void flush();
+
+		/**
+		 * Get statistics of packets written so far.
 		 * @param[out] stats The stats struct where stats are returned
 		 */
-		virtual void getStatistics(pcap_stat& stats);
+		virtual void getStatistics(PcapStats& stats) const;
 	};
 
 
@@ -387,16 +478,12 @@ namespace pcpp
 	{
 	private:
 		void* m_LightPcapNg;
-		struct bpf_program m_Bpf;
-		bool m_BpfInitialized;
-		int m_BpfLinkType;
-		std::string m_CurFilter;
+		int m_CompressionLevel;
+		BpfFilterWrapper m_BpfWrapper;
 
 		// private copy c'tor
 		PcapNgFileWriterDevice(const PcapFileWriterDevice& other);
 		PcapNgFileWriterDevice& operator=(const PcapNgFileWriterDevice& other);
-
-		bool matchPacketWithFilter(const uint8_t* packetData, size_t packetLen, timeval packetTimestamp, uint16_t linkType);
 
 	public:
 
@@ -404,8 +491,9 @@ namespace pcpp
 		 * A constructor for this class that gets the pcap-ng full path file name to open for writing or create. Notice that after calling this
 		 * constructor the file isn't opened yet, so writing packets will fail. For opening the file call open()
 		 * @param[in] fileName The full path of the file
+		 * @param[in] compressionLevel The compression level to use when writing the file, use 0 to disable compression or 10 for max compression. Default is 0
 		 */
-		PcapNgFileWriterDevice(const char* fileName);
+		PcapNgFileWriterDevice(const std::string& fileName, int compressionLevel = 0);
 
 		/**
 		 * A destructor for this class
@@ -427,7 +515,7 @@ namespace pcpp
 		 * @return True if file was opened/created successfully or if file is already opened. False if opening the file failed for some reason
 		 * (an error will be printed to log)
 		 */
-		bool open(const char* os, const char* hardware, const char* captureApp, const char* fileComment);
+		bool open(const std::string& os, const std::string& hardware, const std::string& captureApp, const std::string& fileComment);
 
 		/**
 		 * The pcap-ng format allows adding a user-defined comment for each stored packet. This method writes a RawPacket to the file and
@@ -437,7 +525,7 @@ namespace pcpp
 		 * @param[in] comment The comment to be written for the packet. If this string is empty or null it will be ignored
 		 * @return True if a packet was written successfully. False will be returned if the file isn't opened (an error will be printed to log)
 		 */
-		bool writePacket(RawPacket const& packet, const char* comment);
+		bool writePacket(RawPacket const& packet, const std::string& comment);
 
 		//overridden methods
 
@@ -478,15 +566,20 @@ namespace pcpp
 		bool open(bool appendMode);
 
 		/**
-		 * Flush and close the pacp-ng file
+		 * Flush packets to the pcap-ng file
+		 */
+		void flush();
+
+		/**
+		 * Flush and close the pcap-ng file
 		 */
 		void close();
 
 		/**
-		 * Get statistics of packets written so far. In the pcap_stat struct, only ps_recv member is relevant. The rest of the members will contain 0
+		 * Get statistics of packets written so far.
 		 * @param[out] stats The stats struct where stats are returned
 		 */
-		void getStatistics(pcap_stat& stats);
+		void getStatistics(PcapStats& stats) const;
 
 		/**
 		 * Set a filter for PcapNG writer device. Only packets that match the filter will be persisted

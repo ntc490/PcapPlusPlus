@@ -4,11 +4,6 @@
 #include <stdint.h>
 #include <string>
 #include <vector>
-#if defined(WIN32) || defined(WINx64) || defined(PCAPPP_MINGW_ENV)
-#include <windows.h>
-#else
-#include <pthread.h>
-#endif
 
 /// @file
 
@@ -223,7 +218,7 @@ namespace pcpp
 
 
 	/**
-	 * Covert a core mask into a vector of its appropriate system cores
+	 * Convert a core mask into a vector of its appropriate system cores
 	 * @param[in] coreMask The input core mask
 	 * @param[out] resultVec The vector that will contain the system cores
 	 */
@@ -253,6 +248,48 @@ namespace pcpp
 	int clockGetTime(long& sec, long& nsec);
 
 	/**
+	 * A multi-platform version of the popular sleep method. This method simply runs the right sleep method, according to the platform
+	 * it is running on.
+	 * @param[in] seconds Number of seconds to sleep
+	 */
+	void multiPlatformSleep(uint32_t seconds);
+
+	/**
+	 * A multi-platform version of sleep in milliseconds resolution. This method simply runs the right sleep method, according to the platform
+	 * it is running on.
+	 * @param[in] milliseconds Number of milliseconds to sleep
+	 */
+	void multiPlatformMSleep(uint32_t milliseconds);
+
+	/**
+	 * A multi-platform version of `htons` which convert host to network byte order
+	 * @param[in] host Value in host byte order
+	 * @return Value in network byte order
+	 */
+	uint16_t hostToNet16(uint16_t host);
+
+	/**
+	 * A multi-platform version of `ntohs` which convert network to host byte order
+	 * @param[in] net Value in network byte order
+	 * @return Value in host byte order
+	 */
+	uint16_t netToHost16(uint16_t net);
+
+	/**
+	 * A multi-platform version of `htonl` which convert host to network byte order
+	 * @param[in] host Value in host byte order
+	 * @return Value in network byte order
+	 */
+	uint32_t hostToNet32(uint32_t host);
+
+	/**
+	 * A multi-platform version of `ntohl` which convert network to host byte order
+	 * @param[in] net Value in network byte order
+	 * @return Value in host byte order
+	 */
+	uint32_t netToHost32(uint32_t net);
+
+	/**
 	 * @class AppName
 	 * This class extracts the application name from the current running executable and stores it for usage of the application throughout its runtime.
 	 * This class should be initialized once in the beginning of the main() method using AppName#init() and from then on the app name could be retrieved using AppName#get()
@@ -267,37 +304,40 @@ namespace pcpp
 		 * Static init method which should be called once at the beginning of the main method.
 		 * @param[in] argc The argc param from main()
 		 * @param[in] argv The argv param from main()
+		 * @return No return value
 		 */
 		static void init(int argc, char* argv[])
 		{
 			if (argc == 0)
 			{
-				m_AppName = "";
+				m_AppName.clear();
 				return;
 			}
 
 			m_AppName = argv[0];
 
 			// remove Linux/Unix path
-			while (m_AppName.find("/") != std::string::npos)
+			size_t lastPos = m_AppName.rfind('/');
+			if (lastPos != std::string::npos)
 			{
-				m_AppName = m_AppName.substr(m_AppName.find("/")+1);
+				m_AppName = m_AppName.substr(lastPos + 1);
 			}
 
 			// remove Windows path
-			while (m_AppName.find("\\") != std::string::npos)
+			lastPos = m_AppName.rfind('\\');
+			if (lastPos != std::string::npos)
 			{
-				m_AppName = m_AppName.substr(m_AppName.find("\\")+1);
+				m_AppName = m_AppName.substr(lastPos + 1);
 			}
 
 			// remove file extension
-			m_AppName = m_AppName.substr(0, m_AppName.find("."));
+			m_AppName = m_AppName.substr(0, m_AppName.rfind('.'));
 		}
 
 		/**
 		 * @return The app name as extracted from the current running executable
 		 */
-		static std::string get() { return m_AppName; }
+		static const std::string& get() { return m_AppName; }
 	};
 
 	/**
@@ -340,10 +380,9 @@ namespace pcpp
 		// private c'tor
 		ApplicationEventHandler();
 
-#ifdef WIN32
-		static BOOL WINAPI handlerRoutine(DWORD fdwCtrlType);
+#if defined(_WIN32)
+		static int handlerRoutine(unsigned long fdwCtrlType);
 #else
-		pthread_mutex_t m_HandlerRoutineMutex;
 		static void handlerRoutine(int signum);
 #endif
 	};
