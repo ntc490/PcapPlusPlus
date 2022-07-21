@@ -12,6 +12,9 @@ add_library (light_pcapng
 	LightPcapNg/src/light_advanced.c
 	LightPcapNg/src/light_option.c
 	LightPcapNg/src/light_pcapng_ext.c
+	LightPcapNg/src/light_compression.c
+	LightPcapNg/src/light_null_compression.c
+	LightPcapNg/src/light_zstd_compression.c
 	LightPcapNg/include/light_debug.h
 	LightPcapNg/include/light_internal.h
 	LightPcapNg/include/light_pcapng_ext.h
