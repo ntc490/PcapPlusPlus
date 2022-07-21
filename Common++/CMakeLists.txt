@@ -19,7 +19,6 @@ add_library(CommonPP
 	header/LRUList.h
 	header/MacAddress.h
 	header/PcapPlusPlusVersion.h
-	header/PlatformSpecificUtils.h
 	header/PointerVector.h
 	header/SystemUtils.h
 	header/TablePrinter.h
@@ -28,7 +27,9 @@ add_library(CommonPP
 target_include_directories(CommonPP
 	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/header
 	PUBLIC ${PCAP_INCLUDE_DIR}
-	
+	PUBLIC ${PROJECT_SOURCE_DIR}/3rdParty/EndianPortable/include
+	PUBLIC ${PROJECT_SOURCE_DIR}/3rdParty/hash-library
+
 	# NOTE(eteran): So, unix convention is to use #include <netinet/in.h>, not #include <in.h>
 	# this allows us to avoid name collisions in include files by placing headers in a filesystem
 	# namespace of sorts. I would prefer to eliminate this as anyone who uses PcapPlusPlus must also
