@@ -27,8 +27,6 @@ add_library(CommonPP
 target_include_directories(CommonPP
 	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/header
 	PUBLIC ${PCAP_INCLUDE_DIR}
-	PUBLIC ${PROJECT_SOURCE_DIR}/3rdParty/EndianPortable/include
-	PUBLIC ${PROJECT_SOURCE_DIR}/3rdParty/hash-library
 
 	# NOTE(eteran): So, unix convention is to use #include <netinet/in.h>, not #include <in.h>
 	# this allows us to avoid name collisions in include files by placing headers in a filesystem
@@ -39,7 +37,7 @@ target_include_directories(CommonPP
 )
 
 target_link_libraries(CommonPP PUBLIC
-
+	EndianPortable
 )
 
 if(TARGET_PLATFORM_LINUX)
