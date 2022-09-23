@@ -105,7 +105,7 @@ target_include_directories(PacketPP
 target_link_libraries(PacketPP PUBLIC
 	CommonPP
 	EndianPortable
-
+	hash-library
 )
 
 set_property(TARGET PacketPP PROPERTY CXX_STANDARD 11)
